@@ -1,0 +1,152 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "description": "Connect a Discord bot that keeps a chore board in a channel. Chores and the trash-can watcher are set up afterwards under Configure. The README explains how to create the bot and find the channel ID.",
+        "data": {
+          "bot_token": "Discord bot token",
+          "channel_id": "Channel ID"
+        },
+        "data_description": {
+          "bot_token": "From the Bot tab of your application in the Discord Developer Portal.",
+          "channel_id": "Numeric ID of the channel for the chore board. With Developer Mode on, right-click the channel and choose Copy ID."
+        }
+      }
+    },
+    "error": {
+      "invalid_channel": "Channel ID must be all digits."
+    },
+    "abort": {
+      "already_configured": "This Discord channel is already configured."
+    }
+  },
+  "options": {
+    "step": {
+      "init": {
+        "description": "Saving either page reloads the integration, which briefly reconnects the bot.",
+        "menu_options": {
+          "chores": "Chores",
+          "cans": "Trash-can watcher"
+        }
+      },
+      "chores": {
+        "description": "Custom chores go one per line as: Name | emoji | every N days | note. Only the name is required, and a custom chore with the same name as a built-in one replaces it. {problems}",
+        "data": {
+          "disabled_chores": "Hide built-in chores",
+          "custom_chores": "Custom chores",
+          "digest": "Move the board to the bottom daily",
+          "digest_time": "Daily board time"
+        },
+        "data_description": {
+          "disabled_chores": "Ticked chores are left off the board.",
+          "custom_chores": "Example: Clean litter box | 🐈 | 2",
+          "digest": "Re-posts the board once a day (silently) so it isn't buried under chat.",
+          "digest_time": "When the board is re-posted."
+        }
+      },
+      "cans": {
+        "description": "Everything runs inside Home Assistant: snapshots never leave your network. Tap the Preview region button (or run chores_discord.preview_region) to see the box drawn on a snapshot. Changing the box starts the learning over.",
+        "data": {
+          "cans_enabled": "Watch the trash cans",
+          "camera_entity": "Camera",
+          "cans_channel_id": "Channel for can snapshots",
+          "roi_left": "Region left edge",
+          "roi_top": "Region top edge",
+          "roi_right": "Region right edge",
+          "roi_bottom": "Region bottom edge",
+          "cans_nights": "Cans-out nights",
+          "nag_time": "Reminder time",
+          "renag_minutes": "Second reminder after",
+          "nag_mention": "Who to ping",
+          "cans_chore": "Chore to tick when the cans are out",
+          "check_interval": "Look every",
+          "asks_per_day": "Questions per day",
+          "ask_gap_hours": "Gap between questions",
+          "min_labels": "Labels needed of each kind",
+          "min_accuracy": "Self-test score needed",
+          "confidence": "Confidence needed to act",
+          "min_sun_elevation": "Minimum sun elevation",
+          "min_brightness": "Minimum region brightness",
+          "save_samples": "Keep labelled crops on disk"
+        },
+        "data_description": {
+          "camera_entity": "The doorbell or any camera that can see the curb.",
+          "cans_channel_id": "Leave empty to use the chore board's channel.",
+          "roi_left": "Percent of the picture's width from the left.",
+          "roi_top": "Percent of the picture's height from the top.",
+          "roi_right": "Percent of the picture's width from the left.",
+          "roi_bottom": "Percent of the picture's height from the top.",
+          "cans_nights": "The evenings the cans need to go out (the night before pickup).",
+          "nag_time": "On a cans-out night, look once more at this time and remind if they aren't out.",
+          "renag_minutes": "One follow-up if nobody answered and they still aren't seen out. 0 turns it off.",
+          "nag_mention": "Optional user or role mention, like <@123456789> or <@&987654321>. Whoever claimed the chore below is pinged too.",
+          "cans_chore": "Marked done automatically when the cans are seen or reported out on a cans-out night.",
+          "check_interval": "How often to take a snapshot in daylight.",
+          "asks_per_day": "Most snapshots per day posted asking what you see. One extra is allowed on a cans-out night.",
+          "ask_gap_hours": "Least time between two questions.",
+          "min_labels": "The bot doesn't act on its own guesses until it has at least this many 'out' and 'not out' answers.",
+          "min_accuracy": "And until it predicts its own past answers at least this well (leave-one-out).",
+          "confidence": "Once trusted, a guess below this is treated as unsure (it asks instead of acting).",
+          "min_sun_elevation": "Only look when the sun is at least this high (degrees).",
+          "min_brightness": "Skip a snapshot whose region is darker than this (0-255).",
+          "save_samples": "Saves each crop you label under /config/chores_discord/ so you can review or back up the training set."
+        }
+      }
+    },
+    "error": {
+      "bad_custom": "Some lines couldn't be read: see the description.",
+      "camera_required": "Pick a camera to watch the cans.",
+      "invalid_channel": "Channel ID must be all digits."
+    }
+  },
+  "entity": {
+    "sensor": {
+      "overdue": { "name": "Overdue" },
+      "trash_cans": {
+        "name": "Trash cans",
+        "state": {
+          "out": "Out",
+          "not_out": "Not out",
+          "unsure": "Not sure",
+          "dark": "Too dark",
+          "unknown": "Not checked"
+        }
+      }
+    },
+    "button": {
+      "post_board": { "name": "Post board" },
+      "check_cans": { "name": "Check cans" },
+      "preview_region": { "name": "Preview region" }
+    }
+  },
+  "exceptions": {
+    "not_loaded": { "message": "The Chores Discord Bot isn't loaded." },
+    "unknown_chore": { "message": "There's no chore called {chore}." }
+  },
+  "services": {
+    "post_board": {
+      "name": "Post board",
+      "description": "Posts the chore board again at the bottom of the channel."
+    },
+    "mark_done": {
+      "name": "Mark done",
+      "description": "Marks a chore done, for automations (a robot vacuum finishing, say).",
+      "fields": {
+        "chore": { "name": "Chore", "description": "The chore's name or key, like dishes or Trash-Ext." },
+        "who": { "name": "Who", "description": "Shown on the board as who did it." }
+      }
+    },
+    "check_cans": {
+      "name": "Check cans",
+      "description": "Takes a snapshot now and posts it asking whether the cans are out."
+    },
+    "preview_region": {
+      "name": "Preview region",
+      "description": "Posts a snapshot with the region the bot compares drawn on it."
+    },
+    "reset_cans_model": {
+      "name": "Reset can learning",
+      "description": "Forgets every can label and starts learning from scratch."
+    }
+  }
+}

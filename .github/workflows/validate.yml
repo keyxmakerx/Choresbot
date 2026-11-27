@@ -1,0 +1,49 @@
+name: Validate
+
+on:
+  push:
+  pull_request:
+  schedule:
+    - cron: "0 6 * * *"
+
+jobs:
+  hassfest:
+    name: hassfest
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: home-assistant/actions/hassfest@master
+
+  hacs:
+    name: HACS
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: hacs/action@main
+        with:
+          category: integration
+          # Only needed for the HACS default store (see issue #53).
+          ignore: brands description topics
+
+  tests:
+    name: Tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
+        with:
+          # Match the Python the latest Home Assistant requires; on an older one
+          # pip silently falls back to an ancient release that won't install.
+          python-version: "3.14"
+      - name: Install dependencies
+        # The floor is the integration's minimum (hacs.json), so a resolver
+        # fallback fails here instead of testing an unsupported version.
+        run: pip install "homeassistant>=2025.3" "discord.py==2.7.1" "Pillow"
+      # Each test file is a standalone script.
+      - name: Run tests
+        run: |
+          for test in tests/test_*.py; do
+            echo "::group::$test"
+            python "$test"
+            echo "::endgroup::"
+          done
