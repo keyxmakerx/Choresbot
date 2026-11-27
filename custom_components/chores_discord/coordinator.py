@@ -536,7 +536,10 @@ class ChoresCoordinator:
         buttons to answer, which teach it like the card in the channel does.
         """
         if not self.cans_enabled:
-            return status_view("Bin watching is off.", [], GREY, "Pick a camera under Configure → Bin watcher."), []
+            return status_view(
+                "Bin watching is off.", [], GREY, "Pick a camera under Configure → Bin watcher.",
+                controls=False,
+            ), []
         if self._cans_lock.locked():
             return status_view("Already looking — tap again in a moment.", [], GREY, ""), []
         async with self._cans_lock:

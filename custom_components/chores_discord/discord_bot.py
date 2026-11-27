@@ -28,6 +28,7 @@ from .const import (
     BOARD_SELECT_TEMPLATE,
     CANS_LABEL_TEMPLATE,
     CANS_NAG_TEMPLATE,
+    PEEK_TEMPLATE,
     QUICK_TEMPLATE,
 )
 
@@ -216,12 +217,21 @@ def nag_view(card: NagCard) -> ui.LayoutView:
     return view
 
 
-def status_view(title: str, lines: list[str], colour: int, footer: str) -> ui.LayoutView:
-    """A read-only private card: what it thinks, nothing to press."""
+def _peek_row() -> ui.ActionRow:
+    """Look again, or put the private card away."""
+    return ui.ActionRow(PeekButton("again"), PeekButton("close"))
+
+
+def status_view(
+    title: str, lines: list[str], colour: int, footer: str, *, controls: bool = True
+) -> ui.LayoutView:
+    """A read-only private card: what it thinks, nothing to change."""
     view = ui.LayoutView(timeout=None)
     items: list[Any] = [ui.TextDisplay("\n".join([f"### {title}", *lines]))]
     if footer:
         items.append(ui.TextDisplay(f"-# {footer}"))
+    if controls:
+        items.append(_peek_row())
     view.add_item(ui.Container(*items, accent_colour=colour))
     return view
 
@@ -251,6 +261,7 @@ def inspect_view(card: InspectCard) -> ui.LayoutView:
                 )
         items.append(ui.ActionRow(LabelButton("all", "skip", card.sid, "Can't tell", "🤷")))
     items.append(ui.TextDisplay(f"-# {card.note}"))
+    items.append(_peek_row())
     view.add_item(ui.Container(*items, accent_colour=card.colour))
     return view
 
@@ -355,17 +366,9 @@ class BoardButton(ui.DynamicItem[ui.Button], template=BOARD_BUTTON_TEMPLATE):
             # Private and per person: admins see the working, everyone else
             # just what it thinks. Nothing is posted in the channel.
             await interaction.response.defer()
-            user = interaction.user
-            perms = getattr(user, "guild_permissions", None)
-            admin = coordinator.is_bin_admin(
-                user.id,
-                [role.id for role in getattr(user, "roles", None) or []],
-                bool(perms and (perms.manage_guild or perms.administrator)),
-            )
-            view, files = await coordinator.async_inspect(admin=admin)
-            attachments = [discord.File(io.BytesIO(data), filename=name) for name, data in files]
+            view, files = await coordinator.async_inspect(admin=_is_admin(interaction))
             await interaction.followup.send(
-                view=view, files=attachments or discord.utils.MISSING, ephemeral=True
+                view=view, files=_files(files) or discord.utils.MISSING, ephemeral=True
             )
         except Exception:  # noqa: BLE001
             _LOGGER.exception("Board button failed")
@@ -374,6 +377,51 @@ class BoardButton(ui.DynamicItem[ui.Button], template=BOARD_BUTTON_TEMPLATE):
                     await interaction.followup.send("Couldn't do that just now.", ephemeral=True)
                 else:
                     await _safe_error(interaction)
+            except Exception:  # noqa: BLE001
+                pass
+
+
+def _is_admin(interaction: discord.Interaction) -> bool:
+    user = interaction.user
+    perms = getattr(user, "guild_permissions", None)
+    return _coordinator(interaction).is_bin_admin(
+        user.id,
+        [role.id for role in getattr(user, "roles", None) or []],
+        bool(perms and (perms.manage_guild or perms.administrator)),
+    )
+
+
+def _files(files: list[tuple[str, bytes]]) -> list[discord.File]:
+    return [discord.File(io.BytesIO(data), filename=name) for name, data in files]
+
+
+class PeekButton(ui.DynamicItem[ui.Button], template=PEEK_TEMPLATE):
+    """On a private "Check the bins" card: look again, or close it."""
+
+    def __init__(self, what: str) -> None:
+        label, emoji = ("Look again", "🔄") if what == "again" else ("Close", "✖️")
+        super().__init__(
+            ui.Button(label=label, emoji=emoji, style=discord.ButtonStyle.secondary,
+                      custom_id=f"chores:peek:{what}")
+        )
+        self.what = what
+
+    @classmethod
+    async def from_custom_id(cls, interaction, item, match: re.Match[str], /):
+        return cls(match["what"])
+
+    async def callback(self, interaction: discord.Interaction) -> None:
+        try:
+            await interaction.response.defer()
+            if self.what == "close":
+                await interaction.delete_original_response()
+                return
+            view, files = await _coordinator(interaction).async_inspect(admin=_is_admin(interaction))
+            await interaction.edit_original_response(view=view, attachments=_files(files))
+        except Exception:  # noqa: BLE001
+            _LOGGER.exception("Private bin card button failed")
+            try:
+                await interaction.followup.send("Couldn't do that just now.", ephemeral=True)
             except Exception:  # noqa: BLE001
                 pass
 
@@ -530,7 +578,9 @@ class ChoresDiscordClient(discord.Client):
 
     async def setup_hook(self) -> None:
         # Registered once, before connecting, so taps on old messages route.
-        self.add_dynamic_items(BoardSelect, BoardButton, QuickButton, LabelButton, NagButton)
+        self.add_dynamic_items(
+            BoardSelect, BoardButton, QuickButton, LabelButton, NagButton, PeekButton
+        )
 
     async def on_ready(self) -> None:
         _LOGGER.debug("Chores bot connected as %s", self.user)

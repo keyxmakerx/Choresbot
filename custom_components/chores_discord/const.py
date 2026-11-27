@@ -95,6 +95,7 @@ PANEL_STATIC = "/chores_discord_static"
 # taps on any message ever posted route correctly after a restart.
 BOARD_SELECT_TEMPLATE = r"chores:board:(?P<what>done|claim)"
 BOARD_BUTTON_TEMPLATE = r"chores:board:(?P<what>refresh|check)"
+PEEK_TEMPLATE = r"chores:peek:(?P<what>again|close)"
 QUICK_TEMPLATE = r"chores:quick:(?P<key>[a-z0-9_]{1,60})"
 CANS_LABEL_TEMPLATE = (
     r"chores:cans:(?P<bin>trash|recycling|all):(?P<label>out|in|skip):(?P<sid>[0-9a-f]{1,24})"

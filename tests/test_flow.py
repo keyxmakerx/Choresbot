@@ -231,7 +231,7 @@ async def scenario() -> None:
         Camera.trash, Camera.recycling = True, False
         view, files = await coord.async_inspect(admin=False)
         text = _text(view)
-        assert not files and not _custom_ids(view), text
+        assert not files and _custom_ids(view) == ["chores:peek:again", "chores:peek:close"], text
         assert "Trash" in text and "out" in text and "% sure" in text, text
         view, files = await coord.async_inspect(admin=True)
         assert [f[0] for f in files] == ["region.jpg", "crop.jpg"]
@@ -240,6 +240,7 @@ async def scenario() -> None:
         assert "closest" in text and "self-test" in text and "brightness" in text, text
         sid = next(reversed(coord.state["cans"]["pending"]))
         assert f"chores:cans:trash:out:{sid}" in _custom_ids(view)
+        assert _custom_ids(view)[-2:] == ["chores:peek:again", "chores:peek:close"]
         assert await coord.async_label(sid, "trash", "out", "Key", 7, edit_message=False)
         again = coord.inspect_layout(sid, "https://cdn/r.jpg", "https://cdn/c.jpg")
         assert "says Key" in _text(again) and f"chores:cans:trash:out:{sid}" not in _custom_ids(again)
