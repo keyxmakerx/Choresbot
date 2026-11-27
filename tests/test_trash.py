@@ -103,6 +103,10 @@ def test_plan_nag() -> None:
     assert trash.plan_nag(ready=True, last_result=trash.NOT_OUT, last_at=fresh, now=NOW).kind == "nag"
     assert trash.plan_nag(ready=True, last_result=trash.UNSURE, last_at=fresh, now=NOW).kind == "ask"
     assert trash.plan_nag(ready=True, last_result=trash.DARK, last_at=fresh, now=NOW).kind == "ask"
+    # An older "not out" (it got dark since) asks instead of insisting.
+    assert trash.plan_nag(ready=True, last_result=trash.NOT_OUT, last_at=NOW - 3 * H, now=NOW).kind == "ask"
+    # An "out" from late afternoon still counts at a dark reminder.
+    assert trash.plan_nag(ready=True, last_result=trash.OUT, last_at=NOW - 3 * H, now=NOW).kind == "none"
     stale = NOW - 13 * H
     assert trash.plan_nag(ready=True, last_result=trash.OUT, last_at=stale, now=NOW).kind == "ask"
     assert trash.plan_nag(ready=False, last_result=trash.OUT, last_at=fresh, now=NOW).kind == "ask"

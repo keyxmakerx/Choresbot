@@ -183,19 +183,31 @@ class NagPlan:
     reason: str
 
 
+# A bin seen out stays out, so that sighting counts for the whole evening. A
+# bin seen *not* out only says something about right now: in winter the last
+# daylight look can be hours before the reminder, and the bins often go out
+# after dark. So "not out" only drives a firm nag when it's this recent.
+OUT_FRESH = 12 * HOUR
+NOT_OUT_FRESH = 1 * HOUR
+
+
 def plan_nag(*, ready: bool, last_result: str | None, last_at: float | None, now: float) -> NagPlan:
     """Decide what happens at the cans-night reminder time.
 
-    Only a confident "out" from a check in the last 12 hours keeps the bot
-    quiet. Confident "not out" is a plain nag. Anything less certain (still
-    learning, unsure, dark, no recent check) is a question with buttons, which
-    reminds just the same and doubles as a label when the image is usable.
+    ``last_result``/``last_at`` are from the last *daylight* look (dark looks
+    never judge). A confident "out" in the last 12 hours keeps the bot quiet.
+    A confident "not out" from the last hour is a plain nag. Anything less
+    certain (still learning, unsure, or an older "not out" because it got
+    dark since) is a question with buttons, which reminds just the same and
+    doubles as a label when the image is usable.
     """
-    fresh = last_at is not None and now - last_at < 12 * HOUR
-    if ready and fresh and last_result == OUT:
+    age = None if last_at is None else now - last_at
+    if ready and age is not None and age < OUT_FRESH and last_result == OUT:
         return NagPlan("none", "cans seen out")
-    if ready and fresh and last_result == NOT_OUT:
+    if ready and age is not None and age < NOT_OUT_FRESH and last_result == NOT_OUT:
         return NagPlan("nag", "cans not seen out")
+    if ready and age is not None and age < OUT_FRESH and last_result == NOT_OUT:
+        return NagPlan("ask", "not out at the last daylight look")
     if not ready:
         return NagPlan("ask", "still learning")
     return NagPlan("ask", "not sure")

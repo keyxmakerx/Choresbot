@@ -319,16 +319,46 @@ async def scenario() -> None:
         await coord._renag_later(key)(None)
         assert len(bot.posts) == before + 1
 
-        # After dark: nothing is judged, and the reminder asks instead of nagging.
+        # Winter: it's dark at the reminder. Nothing is judged now, and an old
+        # daylight "not out" turns into a question that says when it looked.
+        import time as _time
         coord.state["cans"]["nights"] = {}
         coord.state["cans"]["last"] = None
         coord._last_crop = None
         coord.hass.states.elevation = -5
         assert "Sun's down" in await coord.async_check_cans(manual=False)
+        coord.state["cans"]["last_daylight"] = {
+            "at": _time.time() - 3 * 3600,
+            "result": {"trash": trash.NOT_OUT, "recycling": trash.NOT_OUT},
+        }
         await coord.async_cans_night(bins=["trash"])
         ask = bot.posts[-1]
-        assert "is it out?" in ask["text"], ask["text"]
+        assert "is it out?" in ask["text"] and "too dark to see now" in ask["text"], ask["text"]
+        assert "my last daylight look, it was not out" in ask["text"], ask["text"]
+        assert "not out yet" not in ask["text"]
         assert not ask["files"]
+
+        # Seen out in late-afternoon daylight: still counts after dark, no reminder.
+        coord.state["cans"]["nights"] = {}
+        coord.state["cans"]["last_daylight"]["result"]["trash"] = trash.OUT
+        posts = len(bot.posts)
+        await coord.async_cans_night(bins=["trash"])
+        assert len(bot.posts) == posts
+        assert coord.state["cans"]["nights"]["trash"]["resolved"] == "out"
+
+        # A firm "not out" at 7 PM, then dark by the follow-up: it asks instead.
+        coord.state["cans"]["nights"] = {}
+        coord.hass.states.elevation = 30
+        Camera.trash = False
+        await coord.async_cans_night(bins=["trash"])
+        assert "not out yet" in bot.posts[-1]["text"], bot.posts[-1]["text"]
+        key = coord.state["cans"]["nag"]["key"]
+        coord.hass.states.elevation = -5
+        coord.state["cans"]["last_daylight"]["at"] -= 2 * 3600
+        await coord._renag_later(key)(None)
+        follow = bot.posts[-1]
+        assert "🔁" in follow["text"] and "too dark to see now" in follow["text"], follow["text"]
+        assert "not out yet" not in follow["text"]
 
         # The training page: samples with model opinions, relabel and delete.
         coord.hass.states.elevation = 30

@@ -576,6 +576,10 @@ class ChoresCoordinator:
         }
         if daylight:
             self._last_crop = (now, analysis.crop_jpeg)
+            # Kept apart so a later dark look can't hide what daylight showed.
+            self.state["cans"]["last_daylight"] = {
+                "at": now, "result": {b: v["result"] for b, v in verdicts.items()},
+            }
 
     async def async_check_cans(self, *, manual: bool, allow_ask: bool = True) -> str:
         """Take a snapshot, classify it, maybe ask for labels. Returns a summary."""
@@ -958,25 +962,57 @@ class ChoresCoordinator:
         open_bins = self._open_bins(key, bins)
         if not open_bins:
             return  # the fresh look saw them all out
-        last = self.state["cans"].get("last") or {}
-        plans = {}
-        for b in open_bins:
-            plan = trash.plan_nag(
-                ready=self.models[b].ready,
-                last_result=(last.get("result") or {}).get(b),
-                last_at=last.get("at"),
-                now=time_mod.time(),
-            )
-            if plan.kind == "none":
-                await self._async_resolve(b, key, "out", "📷 the camera", None)
-            else:
-                plans[b] = plan.kind
+        plans = await self._async_plan(key, open_bins)
         if not plans:
             return
         await self._async_post_nag(key, bins, plans, first=True)
         renag = int(self._opts.get(C.CONF_RENAG, C.DEFAULT_RENAG))
         if renag > 0:
             self._unsubs.append(async_call_later(self.hass, renag * 60, self._renag_later(key)))
+
+    async def _async_plan(self, key: str, open_bins: list[str]) -> dict[str, str]:
+        """Plan each open bin from the last daylight look; bins seen out close."""
+        seen = self._last_daylight()
+        plans: dict[str, str] = {}
+        for b in open_bins:
+            plan = trash.plan_nag(
+                ready=self.models[b].ready,
+                last_result=(seen.get("result") or {}).get(b),
+                last_at=seen.get("at"),
+                now=time_mod.time(),
+            )
+            if plan.kind == "none":
+                await self._async_resolve(b, key, "out", "📷 the camera", None)
+            else:
+                plans[b] = plan.kind
+        return plans
+
+    def _last_daylight(self) -> dict:
+        cans = self.state["cans"]
+        seen = cans.get("last_daylight")
+        if isinstance(seen, dict):
+            return seen
+        last = cans.get("last") or {}  # state saved before last_daylight existed
+        return last if last.get("daylight") else {}
+
+    def _is_light_now(self) -> bool:
+        """Whether the camera could judge right now (sun up and last look bright)."""
+        elevation = self._sun_elevation()
+        if elevation is not None and elevation < self.min_elevation:
+            return False
+        last = self.state["cans"].get("last") or {}
+        return bool(last.get("daylight")) and time_mod.time() - last.get("at", 0) < 15 * 60
+
+    def _seen_text(self, bin_name: str) -> str:
+        """What the last daylight look said, for a reminder sent after dark."""
+        seen = self._last_daylight()
+        result = (seen.get("result") or {}).get(bin_name)
+        at = seen.get("at")
+        if at is None or time_mod.time() - at > trash.OUT_FRESH or result not in (trash.OUT, trash.NOT_OUT, trash.UNSURE):
+            return "I haven't had a daylight look today"
+        local = dt_util.as_local(dt_util.utc_from_timestamp(at))
+        stamp = f"{local.hour % 12 or 12}:{local:%M %p}"
+        return f"at {stamp}, my last daylight look, it was {RESULT_TEXT[result]}"
 
     def _renag_later(self, key: str):
         async def _run(_now) -> None:
@@ -989,9 +1025,11 @@ class ChoresCoordinator:
                 if not self._open_bins(key, bins):
                     return
                 await self.async_check_cans(manual=False, allow_ask=False)
-                open_bins = self._open_bins(key, bins)
-                if open_bins:
-                    await self._async_post_nag(key, bins, nag.get("plans") or {}, first=False)
+                # Re-plan: it may have got dark since, which turns a firm
+                # "not out" into a question.
+                plans = await self._async_plan(key, self._open_bins(key, bins))
+                if plans:
+                    await self._async_post_nag(key, bins, plans, first=False)
             except Exception:  # noqa: BLE001
                 _LOGGER.exception("Second bin reminder failed")
 
@@ -1014,6 +1052,7 @@ class ChoresCoordinator:
         self.state["cans"]["nag"] = {
             "key": key, "bins": bins, "plans": plans, "message_id": None,
             "renagged": not first, "has_image": recent is not None, "sid": sid, "repeat": not first,
+            "dark": not self._is_light_now(),
         }
         mention = self._mention(self._open_bins(key, bins))
         try:
@@ -1056,6 +1095,9 @@ class ChoresCoordinator:
                 lines.append(f"{label} · ⏭️ no pickup this week ({night['by']})")
             elif plans.get(b) == "nag":
                 lines.append(f"{label} · not out yet — the camera doesn't see it")
+                open_bins.append((b, trash.BIN_EMOJI[b], trash.BIN_NAME[b]))
+            elif self.models[b].ready and nag.get("dark"):
+                lines.append(f"{label} · is it out? It's too dark to see now; {self._seen_text(b)}")
                 open_bins.append((b, trash.BIN_EMOJI[b], trash.BIN_NAME[b]))
             else:
                 hedge = "I'm still learning, so tell me" if not self.models[b].ready else "I can't tell from here"
