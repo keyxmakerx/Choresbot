@@ -27,13 +27,26 @@
           "recycling_nights": "The evenings recycling goes out.",
           "recycling_weeks": "Every week, or every other week by ISO week number (check one date on your collection calendar)."
         }
+      },
+      "reconfigure": {
+        "title": "Change the bot token or channel",
+        "description": "Paste the bot token again (Discord shows it only once) and the channel ID. The integration restarts with them.",
+        "data": {
+          "bot_token": "Discord bot token",
+          "channel_id": "Channel ID"
+        },
+        "data_description": {
+          "bot_token": "From the Bot tab of your application in the Discord Developer Portal.",
+          "channel_id": "Numeric ID of the channel for the chore board. With Developer Mode on, right-click the channel and choose Copy ID."
+        }
       }
     },
     "error": {
       "invalid_channel": "Channel ID must be all digits."
     },
     "abort": {
-      "already_configured": "This Discord channel is already configured."
+      "already_configured": "This Discord channel is already configured.",
+      "reconfigure_successful": "Saved. The bot is restarting with the new settings."
     }
   },
   "options": {

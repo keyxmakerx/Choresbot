@@ -82,12 +82,12 @@ from .const import (
 
 
 def _number(minimum: float, maximum: float, step: float, unit: str | None = None):
-    return selector.NumberSelector(
-        selector.NumberSelectorConfig(
-            min=minimum, max=maximum, step=step, unit_of_measurement=unit,
-            mode=selector.NumberSelectorMode.BOX,
-        )
-    )
+    config: dict[str, Any] = {
+        "min": minimum, "max": maximum, "step": step, "mode": selector.NumberSelectorMode.BOX,
+    }
+    if unit:  # Home Assistant rejects an explicit None here
+        config["unit_of_measurement"] = unit
+    return selector.NumberSelector(selector.NumberSelectorConfig(**config))
 
 
 def _select(options: list[tuple[str, str]], *, multiple: bool = False):
@@ -136,6 +136,31 @@ class ChoresConfigFlow(ConfigFlow, domain=DOMAIN):
             }
         )
         return self.async_show_form(step_id="user", data_schema=schema, errors=errors)
+
+    async def async_step_reconfigure(self, user_input: dict[str, Any] | None = None) -> ConfigFlowResult:
+        """Change the bot token or channel without removing the integration."""
+        entry = self._get_reconfigure_entry()
+        errors: dict[str, str] = {}
+        if user_input is not None:
+            channel_id = str(user_input[CONF_CHANNEL_ID]).strip()
+            if not channel_id.isdigit():
+                errors[CONF_CHANNEL_ID] = "invalid_channel"
+            else:
+                return self.async_update_reload_and_abort(
+                    entry,
+                    data_updates={CONF_BOT_TOKEN: user_input[CONF_BOT_TOKEN], CONF_CHANNEL_ID: channel_id},
+                )
+        schema = vol.Schema(
+            {
+                vol.Required(CONF_BOT_TOKEN): selector.TextSelector(
+                    selector.TextSelectorConfig(type=selector.TextSelectorType.PASSWORD)
+                ),
+                vol.Required(
+                    CONF_CHANNEL_ID, default=str(entry.data.get(CONF_CHANNEL_ID, ""))
+                ): selector.TextSelector(),
+            }
+        )
+        return self.async_show_form(step_id="reconfigure", data_schema=schema, errors=errors)
 
     async def async_step_camera(self, user_input: dict[str, Any] | None = None) -> ConfigFlowResult:
         """Pick one of Home Assistant's cameras for the bins (or skip)."""

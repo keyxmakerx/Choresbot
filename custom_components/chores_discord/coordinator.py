@@ -232,7 +232,7 @@ class ChoresCoordinator:
         except asyncio.CancelledError:
             raise
         except discord.LoginFailure:
-            _LOGGER.error("Discord rejected the bot token; reconfigure the integration")
+            _LOGGER.error("Discord rejected the bot token. Fix it from the integration's ⋮ menu → Reconfigure")
         except Exception:  # noqa: BLE001
             _LOGGER.exception("Discord bot stopped")
 

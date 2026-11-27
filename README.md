@@ -187,28 +187,93 @@ when no sample uses it any more. Changing the region sets the old samples
 aside, since they show a different patch of the picture.
 `chores_discord.reset_cans_model` forgets everything.
 
-## Setup
+## Install on a Home Assistant Green
 
-1. **Create the Discord bot.** In the
-   [Discord Developer Portal](https://discord.com/developers/applications),
-   create an application, open **Bot** and copy the token. No privileged
-   intents are needed. Under **OAuth2 → URL Generator**, pick `bot` with
+These steps work on any Home Assistant OS install. The Green needs nothing
+extra: Pillow ships with Home Assistant and discord.py installs itself.
+
+### 1. Before you start
+
+- Home Assistant **2025.3 or newer** (**Settings → About**).
+- **HACS** installed. Follow the Home Assistant OS guide at
+  [hacs.xyz](https://hacs.xyz/docs/use/), which ends with signing HACS in to
+  GitHub.
+- Your doorbell or curb camera already added to Home Assistant as a `camera.`
+  entity. You can skip the camera now and add it later.
+
+### 2. Create the Discord bot (5 minutes)
+
+1. Open the [Discord Developer Portal](https://discord.com/developers/applications)
+   → **New Application**, and name it "Chores".
+2. Open **Bot** → **Reset Token**, then copy the token somewhere safe. It's
+   shown only once. Leave every privileged intent **off**.
+3. Open **OAuth2 → URL Generator**, tick **bot**, then tick these permissions:
    **View Channels, Send Messages, Embed Links, Attach Files, Read Message
-   History, Manage Messages** and invite it. Manage Messages only lets it
-   remove its own old board when it re-posts. Turn on Developer Mode,
-   right-click the channel and **Copy ID**.
-2. **Install.** HACS → ⋮ → **Custom repositories** → add this repository as an
-   **Integration**, download **Chores Discord Bot**, restart Home Assistant.
-3. **Add it.** **Settings → Devices & services → Add integration → Chores
-   Discord Bot**. Step one asks for the token and channel ID. Step two asks
-   for the camera (picked from your Home Assistant cameras) and the trash and
-   recycling nights. You can skip the camera and add it later.
-4. **Admins.** Under **Configure → Bin watcher**, **Who sees the details** lists
-   the Discord users or roles who get the detailed private look. Left empty,
-   anyone who can manage the server gets it.
-5. **Tune.** **Configure → Chores and quick reports** and **Configure → Bin
-   watcher** hold everything else. The **Chores** sidebar page is the easy way
-   to set the region.
+   History, Manage Messages**. Open the generated URL and add the bot to your
+   server. Manage Messages only lets it remove its own old board when it
+   moves the board down.
+4. In Discord, **User Settings → Advanced → Developer Mode** on. Right-click
+   the chores channel → **Copy Channel ID**. While you're there, right-click
+   your own name → **Copy User ID** for step 4 below.
+
+### 3. Install the integration
+
+1. **HACS** → ⋮ (top right) → **Custom repositories**. Paste
+   `https://github.com/keyxmakerx/Choresbot`, pick type **Integration** and
+   click **Add**.
+2. Search HACS for **Chores Discord Bot** → **Download**.
+3. **Settings → System → ⏻ (top right) → Restart Home Assistant**.
+
+### 4. Add it
+
+1. **Settings → Devices & services → Add integration → Chores Discord Bot**.
+2. Paste the bot token and the channel ID.
+3. Pick the camera from the list of your Home Assistant cameras, tick the
+   trash night and the recycling night, and say whether recycling is every
+   week or every other week. Even and odd follow the ISO week number, so
+   check this week's number if pickup alternates.
+4. The board appears in the channel within a few seconds.
+5. Optional, under **Configure → Bin watcher**: put your user ID in **Who sees
+   the details** so 📸 Check the bins shows you the full working. Left
+   empty, anyone who can manage the Discord server gets it. **Who to ping**
+   takes a user or role mention, like `<@123…>` or `<@&456…>`.
+
+### 5. Point it at the bins
+
+Open **Chores** in the Home Assistant sidebar (admins see it). Click **📸 Take
+snapshot**, drag a box snugly around where the bins stand at the curb with a
+little margin, and click **Save region**. Saving reloads the integration.
+
+### 6. Teach it for about a week
+
+In daylight it posts up to three snapshots a day. Tap what you see for each
+bin. When you put the bins out, tapping 📸 Check the bins and answering
+"out" teaches it fastest. Once each bin has 5 of each answer and scores at
+least 90% on its self-test, it's trusted and stops asking unless unsure.
+The **Chores** page shows how close each bin is.
+
+### Good to know
+
+- **Load on the Green:** one look takes a few tens of milliseconds, every 30
+  minutes in daylight. Snapshots never leave the Green.
+- **Storage:** chores, settings and labels are kept in Home Assistant's
+  storage, and sample crops in `/config/chores_discord/`. Both are included in
+  Home Assistant backups.
+- **Cloud doorbells:** some only refresh their snapshot on motion. If the
+  picture on the **Chores** page looks stale, the bot sees the same stale
+  picture. A camera with a live snapshot works best.
+- **Changing the token or channel:** **Settings → Devices & services → Chores
+  Discord Bot → ⋮ → Reconfigure**.
+- **Updates** show up in HACS. Download, then restart Home Assistant.
+- **Something wrong?** **Settings → System → Logs**, search for
+  `chores_discord`. For more detail, add this to `configuration.yaml` and
+  restart:
+
+  ```yaml
+  logger:
+    logs:
+      custom_components.chores_discord: debug
+  ```
 
 You can use the same Discord application as the laundry bot or a separate one.
 If both run in the same Home Assistant at once, each needs its own token.
