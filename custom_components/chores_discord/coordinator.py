@@ -25,17 +25,19 @@ from homeassistant.helpers.event import (
 from homeassistant.helpers.storage import Store
 from homeassistant.util import dt as dt_util
 
-from . import chores as chores_mod, const as C, trash, vision
+from . import chores as chores_mod, const as C, people, trash, vision
 from .discord_bot import (
     AskCard,
     BinRow,
     BoardCard,
     DiscordBot,
     InspectCard,
+    MineCard,
     NagCard,
     ask_view,
     board_view,
     inspect_view,
+    mine_view,
     nag_view,
     preview_view,
     status_view,
@@ -81,6 +83,7 @@ def _blank_state() -> dict:
     return {
         "chores": {},
         "board": {"message_id": None},
+        "people": {},
         "cans": {"refs": [], "pending": {}, "last": None, "asks": [], "nights": {}, "nag": None},
     }
 
@@ -206,6 +209,8 @@ class ChoresCoordinator:
 
     def _migrate(self) -> None:
         """Bring older stored state up to date (all changes are additive)."""
+        if not isinstance(self.state.get("people"), dict):
+            self.state["people"] = {}
         cans = self.state["cans"]
         for ref in cans["refs"]:
             ref.setdefault("bin", trash.BIN_TRASH)
@@ -287,13 +292,78 @@ class ChoresCoordinator:
         self._changed()
         return chore, claimed
 
-    async def async_report(self, key: str, who: str) -> tuple[chores_mod.Chore, bool] | None:
+    async def async_report(
+        self, key: str, who: str, uid: int | None = None
+    ) -> tuple[chores_mod.Chore, bool] | None:
         chore = self.find_chore(key)
         if chore is None:
             return None
-        fresh = chores_mod.report(self.state["chores"], chore.key, time_mod.time(), who)
+        now = time_mod.time()
+        fresh = chores_mod.report(self.state["chores"], chore.key, now, who)
         self._changed()
+        if fresh:
+            item = chores_mod.entry(self.state["chores"], chore.key)
+            claimer = item.get("claimed_by_id") if chores_mod.claimant(item, now) else None
+            folks = self.state["people"]
+            targets = set(people.subscribers(folks, "flags"))
+            if claimer and people.prefs(folks, claimer)["flags"] == people.CLAIMED:
+                targets.add(int(claimer))
+            targets.discard(uid)
+            text = f"🔔 {who} says {chore.emoji} **{chore.name}** needs doing."
+            for target in sorted(targets):
+                await self._async_dm(target, status_view("Chore flagged", [text], RED, "", controls=False))
         return chore, fresh
+
+    # --- people: personal settings --------------------------------------------------
+
+    def _quiet_now(self, uid: int) -> bool:
+        return people.in_quiet(people.prefs(self.state["people"], uid)["quiet"], dt_util.now().hour)
+
+    async def _async_dm(self, uid: int, view, *, silent: bool | None = None) -> bool:
+        """A private message; silent during that person's quiet hours."""
+        if silent is None:
+            silent = self._quiet_now(uid)
+        try:
+            await self._bot.async_dm(uid, view, silent=silent)
+            return True
+        except Exception:  # noqa: BLE001
+            _LOGGER.info("Could not DM %s (DMs closed?)", uid, exc_info=True)
+            return False
+
+    def mine_layout(self, uid: int, name: str):
+        """The private 👤 Mine panel: your chores, then your settings."""
+        now = time_mod.time()
+        state = self.state["chores"]
+        claimed, needs = [], []
+        for chore in self.chores:
+            item = chores_mod.entry(state, chore.key)
+            if chores_mod.claimant(item, now) and item.get("claimed_by_id") == uid:
+                claimed.append(chores_mod.line(chore, item, now))
+        for chore in chores_mod.needing_attention(self.chores, state, now):
+            needs.append(chores_mod.line(chore, chores_mod.entry(state, chore.key), now))
+        mine = self.state["people"].get(str(uid), {})
+        settings = people.prefs(self.state["people"], uid)
+        quiet = self._quiet_now(uid)
+        return mine_view(
+            MineCard(
+                title=f"👤 Just for you, {name}",
+                claimed=claimed,
+                needs=needs[:6],
+                settings=settings,
+                footer=(
+                    "🌙 It's your quiet hours, so nothing pings you right now."
+                    if quiet
+                    else "Only you see this. Changes save straight away."
+                ),
+                customised=bool(mine),
+            )
+        )
+
+    async def async_set_pref(self, uid: int, name: str, setting: str, value: str) -> bool:
+        ok = people.set_pref(self.state["people"], uid, name, setting, value)
+        if ok:
+            self._changed()
+        return ok
 
     async def async_undo(self, key: str, uid: int | None) -> bool:
         ok = chores_mod.undo(self.state["chores"], key, uid)
@@ -402,8 +472,25 @@ class ChoresCoordinator:
         await self.async_update_board()
 
     async def _tick_digest(self, _now) -> None:
-        """Daily: move the board to the bottom of the channel (silently)."""
+        """Daily: move the board to the bottom of the channel (silently), and
+        DM the morning summary to whoever asked for it."""
         await self.async_update_board(repost=True)
+        await self.async_send_summaries()
+
+    async def async_send_summaries(self) -> int:
+        now = time_mod.time()
+        state = self.state["chores"]
+        needs = [
+            chores_mod.line(c, chores_mod.entry(state, c.key), now)
+            for c in chores_mod.needing_attention(self.chores, state, now)
+        ]
+        lines = needs or ["Nothing needs doing. Nice."]
+        sent = 0
+        for uid in people.subscribers(self.state["people"], "summary"):
+            view = status_view("☀️ Today's chores", lines, ORANGE if needs else GREEN,
+                               "Change this in 👤 Mine on the board.", controls=False)
+            sent += await self._async_dm(uid, view)
+        return sent
 
     # --- bins: model -------------------------------------------------------------
 
@@ -834,17 +921,25 @@ class ChoresCoordinator:
         except Exception:  # noqa: BLE001
             _LOGGER.exception("Bin-night reminder failed")
 
-    def _mention(self, bins: list[str]) -> str:
-        parts = [self.nag_mention] if self.nag_mention else []
+    def _bin_people(self, bins: list[str]) -> tuple[list[int], list[tuple[int, bool]]]:
+        """Who gets mentioned on the reminder and who gets it as a DM, by
+        each person's settings (claimers by default)."""
         now = time_mod.time()
+        claimed: set[int] = set()
         for b in bins:
             chore = self.find_chore(self.bin_chore[b]) if self.bin_chore[b] != C.NO_CHORE else None
             if chore:
                 item = chores_mod.entry(self.state["chores"], chore.key)
                 if chores_mod.claimant(item, now) and item.get("claimed_by_id"):
-                    mention = f"<@{item['claimed_by_id']}>"
-                    if mention not in parts:
-                        parts.append(mention)
+                    claimed.add(int(item["claimed_by_id"]))
+        return people.bin_recipients(self.state["people"], claimed, dt_util.now().hour)
+
+    def _mention(self, bins: list[str]) -> str:
+        parts = [self.nag_mention] if self.nag_mention else []
+        mention, _dm = self._bin_people(bins)
+        for uid in mention:
+            if f"<@{uid}>" not in parts:
+                parts.append(f"<@{uid}>")
         return " ".join(parts)
 
     def _open_bins(self, key: str, bins: list[str]) -> list[str]:
@@ -936,6 +1031,13 @@ class ChoresCoordinator:
         if sid:
             self.state["cans"]["pending"][sid]["message_id"] = None  # answered via the nag
         self._changed()
+        # People who asked for bin night by DM get the same card privately;
+        # its buttons work there too.
+        _mention, dms = self._bin_people(self._open_bins(key, bins))
+        for uid, quiet in dms:
+            layout = self.nag_layout(key, None)
+            if layout is not None:
+                await self._async_dm(uid, layout, silent=quiet)
 
     def nag_layout(self, key: str, image: str | None, *, mention: str | None = None):
         nag = self.state["cans"].get("nag") or {}
@@ -984,8 +1086,11 @@ class ChoresCoordinator:
         )
 
     async def async_nag_action(
-        self, key: str, bin_name: str, action: str, who: str, uid: int | None
+        self, key: str, bin_name: str, action: str, who: str, uid: int | None,
+        *, from_message: int | None = None,
     ) -> bool:
+        """A tap on the reminder. The tapped card re-renders itself; when the
+        tap came from a DM copy, the channel card is updated here too."""
         nag = self.state["cans"].get("nag") or {}
         if nag.get("key") != key:
             return False
@@ -998,6 +1103,13 @@ class ChoresCoordinator:
                 await self.async_label(sid, bin_name, "out", who, uid, edit_message=False)
             await self._async_resolve(bin_name, key, "out", who, uid, edit=False)
         self._changed()
+        if from_message is not None and nag.get("message_id") and from_message != nag["message_id"]:
+            try:
+                await self._bot.async_edit_keeping(
+                    self.cans_channel_id, nag["message_id"], lambda url: self.nag_layout(key, url)
+                )
+            except Exception:  # noqa: BLE001
+                _LOGGER.debug("Could not update the night reminder", exc_info=True)
         return True
 
     async def _async_resolve(

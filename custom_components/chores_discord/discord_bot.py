@@ -23,12 +23,14 @@ from typing import TYPE_CHECKING, Any
 import discord
 from discord import ui
 
+from . import people
 from .const import (
     BOARD_BUTTON_TEMPLATE,
     BOARD_SELECT_TEMPLATE,
     CANS_LABEL_TEMPLATE,
     CANS_NAG_TEMPLATE,
     PEEK_TEMPLATE,
+    PREF_TEMPLATE,
     QUICK_TEMPLATE,
 )
 
@@ -129,6 +131,16 @@ class InspectCard:
 
 
 @dataclass
+class MineCard:
+    title: str
+    claimed: list[str]
+    needs: list[str]
+    settings: dict[str, str]
+    footer: str
+    customised: bool = False
+
+
+@dataclass
 class NagCard:
     night: str
     colour: int
@@ -166,7 +178,7 @@ def board_view(card: BoardCard) -> ui.LayoutView:
     if card.bins_text:
         items.append(ui.Separator())
         items.append(ui.TextDisplay(card.bins_text))
-    buttons = ui.ActionRow(BoardButton("refresh"))
+    buttons = ui.ActionRow(BoardButton("refresh"), BoardButton("mine"))
     if card.cans_enabled:
         buttons.add_item(BoardButton("check"))
     items.append(buttons)
@@ -266,6 +278,25 @@ def inspect_view(card: InspectCard) -> ui.LayoutView:
     return view
 
 
+def mine_view(card: MineCard) -> ui.LayoutView:
+    """The private 👤 Mine panel: your chores, then a menu per setting."""
+    view = ui.LayoutView(timeout=None)
+    yours = "\n".join(card.claimed) or "-# Nothing claimed. Use 🙋 on the board to take one."
+    items: list[Any] = [
+        ui.TextDisplay(f"### {card.title}\n**You've claimed**\n{yours}"),
+    ]
+    if card.needs:
+        items.append(ui.TextDisplay("**Up for grabs**\n" + "\n".join(card.needs)))
+    items.append(ui.Separator())
+    items.append(ui.TextDisplay("**How I reach you**"))
+    for setting in people.SETTINGS:
+        items.append(ui.ActionRow(PrefSelect(setting, card.settings.get(setting))))
+    items.append(ui.TextDisplay(f"-# {card.footer}"))
+    items.append(ui.ActionRow(PeekButton("close")))
+    view.add_item(ui.Container(*items, accent_colour=0x5865F2))
+    return view
+
+
 def preview_view(text: str, colour: int) -> ui.LayoutView:
     view = ui.LayoutView(timeout=None)
     view.add_item(
@@ -346,7 +377,11 @@ class BoardSelect(ui.DynamicItem[ui.Select], template=BOARD_SELECT_TEMPLATE):
 
 class BoardButton(ui.DynamicItem[ui.Button], template=BOARD_BUTTON_TEMPLATE):
     def __init__(self, what: str) -> None:
-        label, emoji = ("Refresh", "🔄") if what == "refresh" else ("Check the bins", "📸")
+        label, emoji = {
+            "refresh": ("Refresh", "🔄"),
+            "check": ("Check the bins", "📸"),
+            "mine": ("Mine", "👤"),
+        }[what]
         super().__init__(
             ui.Button(label=label, emoji=emoji, style=discord.ButtonStyle.secondary,
                       custom_id=f"chores:board:{what}")
@@ -362,6 +397,12 @@ class BoardButton(ui.DynamicItem[ui.Button], template=BOARD_BUTTON_TEMPLATE):
         try:
             if self.what == "refresh":
                 await interaction.response.edit_message(view=coordinator.board_layout())
+                return
+            if self.what == "mine":
+                user = interaction.user
+                await interaction.response.send_message(
+                    view=coordinator.mine_layout(user.id, user.display_name), ephemeral=True
+                )
                 return
             # Private and per person: admins see the working, everyone else
             # just what it thinks. Nothing is posted in the channel.
@@ -426,6 +467,42 @@ class PeekButton(ui.DynamicItem[ui.Button], template=PEEK_TEMPLATE):
                 pass
 
 
+class PrefSelect(ui.DynamicItem[ui.Select], template=PREF_TEMPLATE):
+    """One personal setting in the 👤 Mine panel."""
+
+    def __init__(self, setting: str, current: str | None = None) -> None:
+        heading, choices = people.CHOICES[setting]
+        current = current or people.DEFAULTS[setting]
+        super().__init__(
+            ui.Select(
+                custom_id=f"chores:me:{setting}",
+                placeholder=heading,
+                options=[
+                    discord.SelectOption(
+                        label=f"{heading}: {label}"[:100], value=value, emoji=emoji,
+                        default=value == current,
+                    )
+                    for value, label, emoji in choices
+                ],
+            )
+        )
+        self.setting = setting
+
+    @classmethod
+    async def from_custom_id(cls, interaction, item, match: re.Match[str], /):
+        return cls(match["setting"])
+
+    async def callback(self, interaction: discord.Interaction) -> None:
+        coordinator = _coordinator(interaction)
+        user = interaction.user
+        try:
+            await coordinator.async_set_pref(user.id, user.display_name, self.setting, self.item.values[0])
+            await interaction.response.edit_message(view=coordinator.mine_layout(user.id, user.display_name))
+        except Exception:  # noqa: BLE001
+            _LOGGER.exception("Saving a personal setting failed")
+            await _safe_error(interaction)
+
+
 class QuickButton(ui.DynamicItem[ui.Button], template=QUICK_TEMPLATE):
     """One tap: "this needs doing now"."""
 
@@ -443,7 +520,9 @@ class QuickButton(ui.DynamicItem[ui.Button], template=QUICK_TEMPLATE):
     async def callback(self, interaction: discord.Interaction) -> None:
         coordinator = _coordinator(interaction)
         try:
-            result = await coordinator.async_report(self.key, interaction.user.display_name)
+            result = await coordinator.async_report(
+                self.key, interaction.user.display_name, interaction.user.id
+            )
             if result is None:
                 await interaction.response.send_message(
                     "That chore isn't on the list any more.", ephemeral=True
@@ -549,8 +628,10 @@ class NagButton(ui.DynamicItem[ui.Button], template=CANS_NAG_TEMPLATE):
     async def callback(self, interaction: discord.Interaction) -> None:
         coordinator = _coordinator(interaction)
         try:
+            message = getattr(interaction, "message", None)
             ok = await coordinator.async_nag_action(
                 self.night, self.bin, self.action, interaction.user.display_name, interaction.user.id,
+                from_message=getattr(message, "id", None),
             )
             if not ok:
                 await interaction.response.send_message(
@@ -579,7 +660,7 @@ class ChoresDiscordClient(discord.Client):
     async def setup_hook(self) -> None:
         # Registered once, before connecting, so taps on old messages route.
         self.add_dynamic_items(
-            BoardSelect, BoardButton, QuickButton, LabelButton, NagButton, PeekButton
+            BoardSelect, BoardButton, QuickButton, LabelButton, NagButton, PeekButton, PrefSelect
         )
 
     async def on_message(self, message: discord.Message) -> None:
@@ -651,6 +732,13 @@ class DiscordBot:
                 else discord.AllowedMentions.none()
             ),
         )
+        return message.id
+
+    async def async_dm(self, user_id: int, view: ui.LayoutView, *, silent: bool = False) -> int:
+        """Send someone a private message; returns its id."""
+        await self._wait_ready()
+        user = self._client.get_user(user_id) or await self._client.fetch_user(user_id)
+        message = await user.send(view=view, silent=silent, allowed_mentions=discord.AllowedMentions.none())
         return message.id
 
     async def async_fetch(self, channel_id: int, message_id: int) -> discord.Message:

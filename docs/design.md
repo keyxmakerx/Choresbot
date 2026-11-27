@@ -37,6 +37,7 @@ make learning visible and correctable.
 | Once trusted: ask only when unsure | the point of learning is to stop asking |
 | One extra question on a cans night | "out" examples only exist around pickup |
 | One card asks about both bins; each bin's row disappears once answered | one look teaches both, and nobody answers the same question twice |
+| Personal settings live in a private 👤 Mine panel; defaults are quiet | the shared board can't differ per person, so anything personal goes in a private reply, and nobody should have to set anything to avoid noise |
 | 📸 Check the bins answers privately, per person | a shared channel looks the same to everyone, so the detail goes in a private reply: read-only for most, the full working plus answer buttons for admins |
 | Answers are one tap and buttons carry the sample id | works across restarts with nothing in memory; an answered or expired (7 days) snapshot says so |
 

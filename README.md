@@ -36,7 +36,7 @@ with the controls inside the card.
 ┃ ─────────────
 ┃ 🗑️ Trash · not out (20m ago) · Tue
 ┃ ♻️ Recycling · out (20m ago) · Tue (even weeks)
-┃ [🔄 Refresh] [📸 Check the bins]
+┃ [🔄 Refresh] [👤 Mine] [📸 Check the bins]
 ```
 
 | Control | What it does |
@@ -44,6 +44,7 @@ with the controls inside the card.
 | **Quick report** buttons | One tap flags a chore as needing doing now ("Trash needs taking out"), with your name. It jumps to the top of the board until someone marks it done (or after two days). Pick up to five under **Configure → Chores**. |
 | **✅ I did a chore…** | Mark a chore done. You get a private **↩️ Undo** for ten minutes. |
 | **🙋 I'll take a chore…** | Claim a chore so nobody doubles up. Pick it again to drop the claim. Claims lapse after a day. |
+| **👤 Mine** | Opens a private panel just for you: what you've claimed, what's up for grabs, and your own settings (below). |
 | **📸 Check the bins** | Take a look now and answer only you, privately. Everyone gets a read-only "trash out (92% sure), recycling not out". Admins get the working: the snapshot with the region drawn, the crop, each bin's guess, confidence and closest sample, the lighting, and buttons to teach it. |
 
 Discord can't pin a message to the bottom, so the bot moves the board back
@@ -53,6 +54,23 @@ then re-posts the board at the bottom and removes the old one. It only notices
 that someone posted, never what they wrote, so no privileged intent is needed.
 It also moves down once a day (09:00 by default). A channel where only the bot
 posts keeps the board last without any of this.
+
+### Your own settings
+
+Everyone sets how the bot reaches them from **👤 Mine**. Nobody has to set
+anything, and the defaults stay quiet.
+
+| Setting | Choices |
+|---|---|
+| Bin night reminders | Ping me only if I claimed it (default), always ping me in the channel, send me a DM instead, or never ping me |
+| Daily summary | Off (default), or a DM each morning (at the daily board time) with what needs doing |
+| When someone flags a chore | Off (default), DM me about any chore, or only about chores I claimed |
+| Quiet hours | Off, or a window like 10 PM to 7 AM. In quiet hours nobody mentions you, and DMs arrive without a notification. |
+
+A DM'd bin reminder has the same buttons as the one in the channel, and
+tapping one updates both. If someone has DMs from server members turned off,
+the bot skips them quietly. The **Who to ping** mention under Bin watcher
+still applies to everyone it names.
 
 ### Chores
 

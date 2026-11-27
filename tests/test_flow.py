@@ -113,6 +113,7 @@ class FakeBot:
         self.posts: list[dict] = []
         self.views: dict[int, object] = {}
         self.edits: list = []
+        self.dms: list[dict] = []
 
     async def async_post(self, channel_id, view, *, files=None, silent=True, mention=False):
         mid = 1000 + len(self.posts)
@@ -132,6 +133,11 @@ class FakeBot:
         view = build("https://cdn.example/cans.jpg")
         if view is not None:
             await self.async_edit(channel_id, message_id, view)
+
+    async def async_dm(self, user_id, view, *, silent=False):
+        assert _count(view.to_components()) <= MAX_COMPONENTS
+        self.dms.append({"to": user_id, "view": view, "silent": silent, "text": _text(view)})
+        return 5000 + len(self.dms)
 
     async def async_delete(self, channel_id, message_id):
         self.views.pop(message_id, None)
@@ -267,6 +273,23 @@ async def scenario() -> None:
         assert not coord.is_bin_admin(5, [], True)
         coord.bin_admins = set()
 
+        # 👤 Mine: a private panel per person, with their settings.
+        mine = coord.mine_layout(9, "Sam")
+        assert _count(mine.to_components()) <= MAX_COMPONENTS
+        assert {"chores:me:bin", "chores:me:summary", "chores:me:flags", "chores:me:quiet"} <= set(_custom_ids(mine))
+        assert "Just for you, Sam" in _text(mine)
+        assert await coord.async_set_pref(9, "Sam", "bin", "dm")
+        assert not await coord.async_set_pref(9, "Sam", "bin", "loud")
+        assert await coord.async_set_pref(8, "Alex", "flags", "dm")
+        assert await coord.async_set_pref(8, "Alex", "summary", "dm")
+        await coord.async_report("dishes", "Sam", 9)
+        assert bot.dms[-1]["to"] == 8 and "Dishes" in bot.dms[-1]["text"], bot.dms
+        dms_before = len(bot.dms)
+        await coord.async_report("dishes", "Alex", 8)  # already flagged: nobody told again
+        assert len(bot.dms) == dms_before
+        assert await coord.async_send_summaries() == 1 and bot.dms[-1]["to"] == 8
+        assert await coord.async_mark_done("dishes", "Key", 7)
+
         # Bin night: trash out, recycling not. Only recycling is nagged.
         Camera.trash, Camera.recycling = True, False
         coord.state["cans"]["nights"] = {}
@@ -279,6 +302,10 @@ async def scenario() -> None:
         assert nag["silent"] is False and nag["mention"] and "<@42>" in nag["text"], nag
         assert "not out yet" in nag["text"] and "✅ out" in nag["text"], nag["text"]
         key = coord.state["cans"]["nag"]["key"]
+        # Sam asked for bin night by DM: same card, privately, buttons included.
+        dm = bot.dms[-1]
+        assert dm["to"] == 9 and f"chores:nag:recycling:out:{key}" in _custom_ids(dm["view"])
+        assert "<@9>" not in nag["text"]
         assert f"chores:nag:recycling:out:{key}" in _custom_ids(nag["view"])
         assert f"chores:nag:trash:out:{key}" not in _custom_ids(nag["view"])
 

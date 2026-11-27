@@ -100,7 +100,8 @@ PANEL_STATIC = "/chores_discord_static"
 # Every control is a DynamicItem: what it acts on rides in its custom id, so
 # taps on any message ever posted route correctly after a restart.
 BOARD_SELECT_TEMPLATE = r"chores:board:(?P<what>done|claim)"
-BOARD_BUTTON_TEMPLATE = r"chores:board:(?P<what>refresh|check)"
+BOARD_BUTTON_TEMPLATE = r"chores:board:(?P<what>refresh|check|mine)"
+PREF_TEMPLATE = r"chores:me:(?P<setting>bin|summary|flags|quiet)"
 PEEK_TEMPLATE = r"chores:peek:(?P<what>again|close)"
 QUICK_TEMPLATE = r"chores:quick:(?P<key>[a-z0-9_]{1,60})"
 CANS_LABEL_TEMPLATE = (
