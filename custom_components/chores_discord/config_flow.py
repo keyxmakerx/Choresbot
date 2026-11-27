@@ -19,6 +19,7 @@ from . import chores as chores_mod
 from .const import (
     CONF_ASK_GAP,
     CONF_ASKS_PER_DAY,
+    CONF_BIN_ADMINS,
     CONF_BOT_TOKEN,
     CONF_CAMERA,
     CONF_CANS_CHANNEL_ID,
@@ -242,6 +243,7 @@ class ChoresOptionsFlow(OptionsFlow):
                     CONF_NAG_TIME: str(user_input[CONF_NAG_TIME]),
                     CONF_RENAG: int(user_input[CONF_RENAG]),
                     CONF_NAG_MENTION: (user_input.get(CONF_NAG_MENTION) or "").strip(),
+                    CONF_BIN_ADMINS: (user_input.get(CONF_BIN_ADMINS) or "").strip(),
                     CONF_CANS_CHORE: user_input[CONF_CANS_CHORE],
                     CONF_RECYCLING_NIGHTS: [int(d) for d in user_input.get(CONF_RECYCLING_NIGHTS, [])],
                     CONF_RECYCLING_WEEKS: user_input[CONF_RECYCLING_WEEKS],
@@ -297,6 +299,9 @@ class ChoresOptionsFlow(OptionsFlow):
                 req(CONF_RENAG, DEFAULT_RENAG): _number(0, MAX_RENAG, 5, "minutes"),
                 vol.Optional(
                     CONF_NAG_MENTION, description={"suggested_value": current.get(CONF_NAG_MENTION, "")}
+                ): selector.TextSelector(),
+                vol.Optional(
+                    CONF_BIN_ADMINS, description={"suggested_value": current.get(CONF_BIN_ADMINS, "")}
                 ): selector.TextSelector(),
                 req(CONF_CANS_CHORE, DEFAULT_CANS_CHORE): _select(chore_options),
                 req(CONF_RECYCLING_CHORE, DEFAULT_RECYCLING_CHORE): _select(chore_options),

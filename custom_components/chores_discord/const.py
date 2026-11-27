@@ -52,6 +52,9 @@ CONF_MIN_ELEVATION = "min_sun_elevation"
 CONF_MIN_BRIGHTNESS = "min_brightness"
 CONF_CANS_CHORE = "cans_chore"
 CONF_NAG_MENTION = "nag_mention"
+# Discord user or role ids that get the detailed private "Check the bins".
+# Empty means anyone with Manage Server.
+CONF_BIN_ADMINS = "bin_admins"
 
 DEFAULT_CANS_ENABLED = False
 # The region as percentages of the frame: a guess at "far right, lower half".

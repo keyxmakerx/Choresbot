@@ -7,6 +7,7 @@ import base64
 from datetime import timedelta
 import logging
 import os
+import re
 import time as time_mod
 from typing import Any
 
@@ -30,11 +31,14 @@ from .discord_bot import (
     BinRow,
     BoardCard,
     DiscordBot,
+    InspectCard,
     NagCard,
     ask_view,
     board_view,
+    inspect_view,
     nag_view,
     preview_view,
+    status_view,
 )
 
 _LOGGER = logging.getLogger(__name__)
@@ -66,6 +70,11 @@ RESULT_TEXT = {
     trash.DARK: "too dark to see",
     trash.UNKNOWN: "not checked yet",
 }
+
+
+def parse_ids(text: str) -> set[int]:
+    """Discord ids from free text: plain ids, <@user> or <@&role> mentions."""
+    return {int(m) for m in re.findall(r"\d{15,22}", str(text))}
 
 
 def _blank_state() -> dict:
@@ -135,6 +144,7 @@ class ChoresCoordinator:
             or C.NO_CHORE,
         }
         self.nag_mention = str(opts.get(C.CONF_NAG_MENTION) or "").strip()
+        self.bin_admins = parse_ids(opts.get(C.CONF_BIN_ADMINS) or "")
         self.confidence = float(opts.get(C.CONF_CONFIDENCE, C.DEFAULT_CONFIDENCE)) / 100.0
         self.min_labels = int(opts.get(C.CONF_MIN_LABELS, C.DEFAULT_MIN_LABELS))
         self.min_accuracy = float(opts.get(C.CONF_MIN_ACCURACY, C.DEFAULT_MIN_ACCURACY)) / 100.0
@@ -493,9 +503,7 @@ class ChoresCoordinator:
                 if asked and not manual:
                     cans["asks"] = [t for t in cans["asks"] if now - t < trash.DAY] + [now]
 
-            for b in tonight:
-                if verdicts[b]["result"] == trash.OUT:
-                    await self._async_resolve(b, trash.night_key(local), "out", "📷 the camera", None)
+            await self._async_resolve_seen(verdicts, local)
             self._changed()
 
         text = " ".join(
@@ -504,6 +512,148 @@ class ChoresCoordinator:
         if asked:
             text += " Posted the snapshot — tap what you see."
         return text
+
+    async def _async_resolve_seen(self, verdicts: dict, local) -> None:
+        """A bin seen out on its night closes that night (and ticks its chore)."""
+        for b in self.bins_tonight(local):
+            if verdicts[b]["result"] == trash.OUT:
+                await self._async_resolve(b, trash.night_key(local), "out", "📷 the camera", None)
+
+    # --- bins: "📸 Check the bins", private and different per person -----------------
+
+    def is_bin_admin(self, uid: int, role_ids, manages_server: bool) -> bool:
+        """Who gets the detailed view. Listed users or roles; else server managers."""
+        if self.bin_admins:
+            return uid in self.bin_admins or bool(self.bin_admins & set(role_ids or ()))
+        return manages_server
+
+    async def async_inspect(self, *, admin: bool) -> tuple[Any, list[tuple[str, bytes]]]:
+        """A fresh look, answered privately to whoever tapped "Check the bins".
+
+        Everyone gets a read-only "here's what I think". Admins get the
+        working: the snapshot with the region drawn, the crop, each bin's guess,
+        confidence and closest sample, the lighting against the thresholds, and
+        buttons to answer, which teach it like the card in the channel does.
+        """
+        if not self.cans_enabled:
+            return status_view("Bin watching is off.", [], GREY, "Pick a camera under Configure → Bin watcher."), []
+        if self._cans_lock.locked():
+            return status_view("Already looking — tap again in a moment.", [], GREY, ""), []
+        async with self._cans_lock:
+            try:
+                analysis, content, verdicts, daylight = await self._async_look()
+            except HomeAssistantError as err:
+                _LOGGER.warning("No snapshot from %s: %s", self.camera, err)
+                return status_view("Couldn't get a snapshot from the camera.", [], RED, ""), []
+            self._record(analysis, verdicts, daylight)
+            local = dt_util.now()
+            await self._async_resolve_seen(verdicts, local)
+            diag = {
+                "verdicts": verdicts,
+                "elevation": self._sun_elevation(),
+                "brightness": analysis.brightness,
+                "daylight": daylight,
+            }
+            sid = None
+            if admin and daylight:
+                sid = self._new_sample(
+                    analysis, verdicts, self.bins_tonight(local), trash.night_key(local), posted=False
+                )
+                self.state["cans"]["pending"][sid]["inspect"] = diag
+                await self.hass.async_add_executor_job(self._write_sample, sid, analysis.crop_jpeg)
+            self._changed()
+
+        if not admin:
+            lines = [
+                f"{trash.BIN_EMOJI[b]} **{trash.BIN_NAME[b]}** · {self._plain_verdict(b, v)}"
+                for b, v in verdicts.items()
+            ]
+            learning = [trash.BIN_NAME[b] for b in trash.BINS if not self.models[b].ready]
+            footer = "Looked just now"
+            if learning:
+                footer += f" · still learning {' and '.join(learning).lower()}"
+            return status_view("📸 The bins right now", lines, self._look_colour(verdicts), footer), []
+
+        region = await self.hass.async_add_executor_job(vision.roi_preview, content, self.roi)
+        view = self._inspect_card(sid, diag, "attachment://region.jpg", "attachment://crop.jpg")
+        return view, [("region.jpg", region), ("crop.jpg", analysis.crop_jpeg)]
+
+    def _plain_verdict(self, bin_name: str, v: dict) -> str:
+        result = v["result"]
+        if result in (trash.OUT, trash.NOT_OUT):
+            return f"**{RESULT_TEXT[result]}** ({round(v['confidence'] * 100)}% sure)"
+        if result == trash.UNSURE and v.get("label"):
+            word = "out" if v["label"] == vision.LABEL_OUT else "not out"
+            return f"not sure, maybe {word}"
+        return RESULT_TEXT[result]
+
+    @staticmethod
+    def _look_colour(verdicts: dict) -> int:
+        results = {v["result"] for v in verdicts.values()}
+        if results == {trash.OUT}:
+            return GREEN
+        if trash.DARK in results:
+            return GREY
+        return BLUE if trash.UNSURE in results else YELLOW
+
+    def inspect_layout(self, sid: str, region: str, crop: str):
+        """Re-render an admin's private look after they answer on it."""
+        sample = self.state["cans"]["pending"].get(sid)
+        if sample is None or "inspect" not in sample:
+            return None
+        return self._inspect_card(sid, sample["inspect"], region, crop)
+
+    def _inspect_card(self, sid: str | None, diag: dict, region: str, crop: str):
+        sample = self.state["cans"]["pending"].get(sid) if sid else None
+        answers = sample["answers"] if sample else {}
+        rows: list[BinRow] = []
+        details: list[str] = []
+        for b, v in diag["verdicts"].items():
+            model = self.models[b]
+            answer = answers.get(b)
+            if answer:
+                word = "out" if answer["label"] == vision.LABEL_OUT else "not out"
+                mark = "" if answer.get("right") is None else (" ✓ guess right" if answer["right"] else " ✗ guess wrong")
+                text = f"**{word}** says {answer['who']}{mark}"
+            else:
+                text = f"**{RESULT_TEXT[v['result']]}**"
+            rows.append(BinRow(b, trash.BIN_EMOJI[b], trash.BIN_NAME[b], text, bool(answer)))
+            guess = (
+                "no samples yet" if v.get("label") is None
+                else f"guess {'out' if v['label'] == vision.LABEL_OUT else 'not out'} "
+                f"{round(v['confidence'] * 100)}% · closest {v['nearest']:.2f} · compared {v['compared']}"
+            )
+            trust = "trusted" if model.ready else "learning"
+            acc = "—" if model.accuracy is None else f"{round(model.accuracy * 100)}%"
+            details.append(
+                f"{trash.BIN_EMOJI[b]} {guess}\n-# {trust} · {model.out} out · {model.not_out} not out · "
+                f"self-test {acc} (trusts at {self.min_labels} each and {round(self.min_accuracy * 100)}%)"
+            )
+        elevation = diag.get("elevation")
+        sun = "sun ?" if elevation is None else f"sun {elevation:.0f}° (needs {self.min_elevation:g}°)"
+        light = (
+            f"{'☀️' if diag['daylight'] else '🌙'} {sun} · brightness {diag['brightness']:.0f} "
+            f"(needs {self.min_brightness:g}) · {'judging' if diag['daylight'] else 'too dark, not judging'}"
+        )
+        if sid is None:
+            note = "Too dark to answer this one; it wouldn't teach anything."
+        elif sample and sample.get("skipped_by"):
+            note = f"🤷 {sample['skipped_by']} couldn't tell; not used for learning."
+        else:
+            note = "Answering teaches it, same as the card in the channel."
+        return inspect_view(
+            InspectCard(
+                sid=sid,
+                colour=self._look_colour(diag["verdicts"]),
+                region=region,
+                crop=crop,
+                rows=rows,
+                details=details,
+                light=light,
+                note=note,
+                closed=sid is None or bool(sample and sample.get("closed")),
+            )
+        )
 
     def _guess_text(self, bin_name: str, guess: dict) -> str:
         label = guess.get("label")

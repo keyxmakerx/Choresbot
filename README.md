@@ -44,7 +44,7 @@ with the controls inside the card.
 | **Quick report** buttons | One tap flags a chore as needing doing now ("Trash needs taking out"), with your name. It jumps to the top of the board until someone marks it done (or after two days). Pick up to five under **Configure → Chores**. |
 | **✅ I did a chore…** | Mark a chore done. You get a private **↩️ Undo** for ten minutes. |
 | **🙋 I'll take a chore…** | Claim a chore so nobody doubles up. Pick it again to drop the claim. Claims lapse after a day. |
-| **📸 Check the bins** | Take a snapshot now and post it asking what you see. |
+| **📸 Check the bins** | Take a look now and answer only you, privately. Everyone gets a read-only "trash out (92% sure), recycling not out". Admins get the working: the snapshot with the region drawn, the crop, each bin's guess, confidence and closest sample, the lighting, and buttons to teach it. |
 
 Once a day (09:00 by default) the board is re-posted at the bottom of the
 channel, silently, so it isn't buried under chat.
@@ -180,7 +180,10 @@ aside, since they show a different patch of the picture.
    Discord Bot**. Step one asks for the token and channel ID. Step two asks
    for the camera (picked from your Home Assistant cameras) and the trash and
    recycling nights. You can skip the camera and add it later.
-4. **Tune.** **Configure → Chores and quick reports** and **Configure → Bin
+4. **Admins.** Under **Configure → Bin watcher**, **Who sees the details** lists
+   the Discord users or roles who get the detailed private look. Left empty,
+   anyone who can manage the server gets it.
+5. **Tune.** **Configure → Chores and quick reports** and **Configure → Bin
    watcher** hold everything else. The **Chores** sidebar page is the easy way
    to set the region.
 

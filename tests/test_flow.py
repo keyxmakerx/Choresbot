@@ -226,6 +226,31 @@ async def scenario() -> None:
         assert await coord.async_label(sid, "trash", "out", "Key", 7) is None
         assert await coord.async_label("deadbeef", "trash", "out", "Key", 7) is None
 
+        # "Check the bins" is private and per person.
+        posts = len(bot.posts)
+        Camera.trash, Camera.recycling = True, False
+        view, files = await coord.async_inspect(admin=False)
+        text = _text(view)
+        assert not files and not _custom_ids(view), text
+        assert "Trash" in text and "out" in text and "% sure" in text, text
+        view, files = await coord.async_inspect(admin=True)
+        assert [f[0] for f in files] == ["region.jpg", "crop.jpg"]
+        assert _count(view.to_components()) <= MAX_COMPONENTS
+        text = _text(view)
+        assert "closest" in text and "self-test" in text and "brightness" in text, text
+        sid = next(reversed(coord.state["cans"]["pending"]))
+        assert f"chores:cans:trash:out:{sid}" in _custom_ids(view)
+        assert await coord.async_label(sid, "trash", "out", "Key", 7, edit_message=False)
+        again = coord.inspect_layout(sid, "https://cdn/r.jpg", "https://cdn/c.jpg")
+        assert "says Key" in _text(again) and f"chores:cans:trash:out:{sid}" not in _custom_ids(again)
+        assert len(bot.posts) == posts  # nothing went to the channel
+        assert coord.is_bin_admin(1, [], True) and not coord.is_bin_admin(1, [], False)
+        coord.bin_admins = coord_mod.parse_ids("<@123456789012345678> <@&223456789012345678>")
+        assert coord.is_bin_admin(123456789012345678, [], False)
+        assert coord.is_bin_admin(5, [223456789012345678], False)
+        assert not coord.is_bin_admin(5, [], True)
+        coord.bin_admins = set()
+
         # Bin night: trash out, recycling not. Only recycling is nagged.
         Camera.trash, Camera.recycling = True, False
         coord.state["cans"]["nights"] = {}
@@ -265,7 +290,7 @@ async def scenario() -> None:
         # The training page: samples with model opinions, relabel and delete.
         coord.hass.states.elevation = 30
         samples = await coord.async_panel_samples()
-        assert len(samples) == 32 and all(s["thumb"] for s in samples)
+        assert len(samples) == 33 and all(s["thumb"] for s in samples)
         target = samples[0]
         flipped = "in" if target["label"] == "out" else "out"
         assert await coord.async_panel_relabel(target["id"], flipped)
@@ -273,7 +298,7 @@ async def scenario() -> None:
         assert again[target["id"]]["label"] == flipped
         assert again[target["id"]]["model_says"] == target["label"]  # it now disagrees
         assert await coord.async_panel_delete(target["id"])
-        assert len(await coord.async_panel_samples()) == 31
+        assert len(await coord.async_panel_samples()) == 32
         snap = await coord.async_panel_snapshot()
         assert snap["sid"] and snap["frame"] and set(snap["verdicts"]) == {"trash", "recycling"}
         overview = await coord.async_panel_overview()

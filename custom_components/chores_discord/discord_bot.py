@@ -113,6 +113,21 @@ class AskCard:
 
 
 @dataclass
+class InspectCard:
+    """An admin's private look: the working behind the guess."""
+
+    sid: str | None  # None when it was too dark to make a usable sample
+    colour: int
+    region: str
+    crop: str
+    rows: list[BinRow]
+    details: list[str]
+    light: str
+    note: str
+    closed: bool
+
+
+@dataclass
 class NagCard:
     night: str
     colour: int
@@ -197,6 +212,45 @@ def nag_view(card: NagCard) -> ui.LayoutView:
         items.append(row)
     if card.footer:
         items.append(ui.TextDisplay(f"-# {card.footer}"))
+    view.add_item(ui.Container(*items, accent_colour=card.colour))
+    return view
+
+
+def status_view(title: str, lines: list[str], colour: int, footer: str) -> ui.LayoutView:
+    """A read-only private card: what it thinks, nothing to press."""
+    view = ui.LayoutView(timeout=None)
+    items: list[Any] = [ui.TextDisplay("\n".join([f"### {title}", *lines]))]
+    if footer:
+        items.append(ui.TextDisplay(f"-# {footer}"))
+    view.add_item(ui.Container(*items, accent_colour=colour))
+    return view
+
+
+def inspect_view(card: InspectCard) -> ui.LayoutView:
+    view = ui.LayoutView(timeout=None)
+    items: list[Any] = [
+        ui.TextDisplay("### 🔍 What the camera sees"),
+        ui.MediaGallery(
+            discord.MediaGalleryItem(card.region, description="Whole snapshot, region outlined"),
+            discord.MediaGalleryItem(card.crop, description="The crop it compares"),
+        ),
+        ui.TextDisplay("\n".join(f"{r.emoji} **{r.name}** · {r.text}" for r in card.rows)),
+        ui.Separator(spacing=discord.SeparatorSpacing.small),
+        ui.TextDisplay("\n".join(card.details)),
+        ui.TextDisplay(f"-# {card.light}"),
+    ]
+    if not card.closed and card.sid:
+        items.append(ui.Separator(spacing=discord.SeparatorSpacing.small))
+        for r in card.rows:
+            if not r.answered:
+                items.append(
+                    ui.ActionRow(
+                        LabelButton(r.bin, "out", card.sid, f"{r.name} out", r.emoji),
+                        LabelButton(r.bin, "in", card.sid, "Not out", None),
+                    )
+                )
+        items.append(ui.ActionRow(LabelButton("all", "skip", card.sid, "Can't tell", "🤷")))
+    items.append(ui.TextDisplay(f"-# {card.note}"))
     view.add_item(ui.Container(*items, accent_colour=card.colour))
     return view
 
@@ -298,9 +352,21 @@ class BoardButton(ui.DynamicItem[ui.Button], template=BOARD_BUTTON_TEMPLATE):
             if self.what == "refresh":
                 await interaction.response.edit_message(view=coordinator.board_layout())
                 return
-            await interaction.response.defer(ephemeral=True, thinking=True)
-            text = await coordinator.async_check_cans(manual=True)
-            await interaction.followup.send(text, ephemeral=True)
+            # Private and per person: admins see the working, everyone else
+            # just what it thinks. Nothing is posted in the channel.
+            await interaction.response.defer()
+            user = interaction.user
+            perms = getattr(user, "guild_permissions", None)
+            admin = coordinator.is_bin_admin(
+                user.id,
+                [role.id for role in getattr(user, "roles", None) or []],
+                bool(perms and (perms.manage_guild or perms.administrator)),
+            )
+            view, files = await coordinator.async_inspect(admin=admin)
+            attachments = [discord.File(io.BytesIO(data), filename=name) for name, data in files]
+            await interaction.followup.send(
+                view=view, files=attachments or discord.utils.MISSING, ephemeral=True
+            )
         except Exception:  # noqa: BLE001
             _LOGGER.exception("Board button failed")
             try:
@@ -402,7 +468,9 @@ class LabelButton(ui.DynamicItem[ui.Button], template=CANS_LABEL_TEMPLATE):
                     "That snapshot has already been answered or has expired.", ephemeral=True
                 )
                 return
-            layout = coordinator.ask_layout(self.sid, image_url(interaction, "cans.jpg"))
+            layout = coordinator.inspect_layout(
+                self.sid, image_url(interaction, "region.jpg"), image_url(interaction, "crop.jpg")
+            ) or coordinator.ask_layout(self.sid, image_url(interaction, "cans.jpg"))
             if layout is not None:
                 await interaction.response.edit_message(view=layout)
             else:
