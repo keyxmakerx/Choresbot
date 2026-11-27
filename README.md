@@ -132,20 +132,32 @@ looks once more, then for each bin due that night:
 
 | What it knows | What it does |
 |---|---|
-| Trusted, and saw it out in the last 12 hours | Nothing. Ticks the Trash or Recycling chore as done by the camera. |
-| Trusted, and it isn't out | One reminder card for every bin still to go out. It pings your chosen mention and whoever claimed the chore, with a **Trash is out** / **Recycling is out** button per bin and **⏭️ No pickup this week**. |
-| Still learning, unsure, or dark | The same card, asking "is it out?" instead. With a fresh daylight snapshot, the answer also teaches it. |
+| Trusted, and saw it out in daylight in the last 12 hours | Nothing. Ticks the Trash or Recycling chore as done by the camera. |
+| Trusted, and saw it not out in the last hour | One reminder card for every bin still to go out. It pings your chosen mention and whoever claimed the chore, with a **Trash is out** / **Recycling is out** button per bin and **⏭️ No pickup this week**. |
+| Dark now, and the last "not out" was earlier | The same card, but it asks instead of insisting: "is it out? It's too dark to see now; at 4:15 PM, my last daylight look, it was not out". |
+| Still learning or unsure | The same card, asking "is it out?". With a fresh daylight snapshot, the answer also teaches it. |
 
 If a bin still isn't out an hour later (configurable, 0 turns it off), one
-follow-up goes out. Seeing a bin out, or anyone tapping its button, closes it
+follow-up goes out. It re-checks first, so if it got dark in between, the
+follow-up asks rather than repeating "not out". Seeing a bin out, or anyone tapping its button, closes it
 on the card.
 
 ### Daylight only
 
 It only judges the bins when the sun is at least 3° up (from `sun.sun`) and the
 region isn't too dark. A night-time look is recorded as "too dark", never as
-"not out". In winter the reminder is often after dark, so it relies on the
-last daylight look that day, or asks.
+"not out", and never hides what the last daylight look saw.
+
+In winter the reminder is often after dark. Then:
+
+- A bin **seen out** in daylight that afternoon counts, and nobody is
+  reminded about it.
+- A bin last **seen not out** hours earlier probably went out after dark, so
+  the reminder asks, and says when it last saw it, instead of claiming it's
+  not out.
+- Scheduled looks run every 30 minutes until dusk, so the last daylight look
+  is usually close to sunset. Putting the bins out before dark lets the
+  camera confirm them by itself.
 
 ## The training page
 
