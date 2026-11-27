@@ -1,0 +1,15 @@
+post_board:
+mark_done:
+  fields:
+    chore:
+      required: true
+      example: "dishes"
+      selector:
+        text:
+    who:
+      example: "Sam"
+      selector:
+        text:
+check_cans:
+preview_region:
+reset_cans_model:

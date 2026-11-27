@@ -1,0 +1,220 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "description": "Connect a Discord bot that keeps a chore board in a channel. The README explains how to create the bot and find the channel ID.",
+        "data": {
+          "bot_token": "Discord bot token",
+          "channel_id": "Channel ID"
+        },
+        "data_description": {
+          "bot_token": "From the Bot tab of your application in the Discord Developer Portal.",
+          "channel_id": "Numeric ID of the channel for the chore board. With Developer Mode on, right-click the channel and choose Copy ID."
+        }
+      },
+      "camera": {
+        "title": "Bin watcher (optional)",
+        "description": "Pick the Home Assistant camera that can see the curb (your doorbell, for example) and the nights the bins go out. Everything runs inside Home Assistant: snapshots never leave your network. Leave the camera empty to skip; you can add it later under Configure.",
+        "data": {
+          "camera_entity": "Camera",
+          "cans_nights": "Trash nights",
+          "recycling_nights": "Recycling nights",
+          "recycling_weeks": "Recycling weeks"
+        },
+        "data_description": {
+          "camera_entity": "Any camera entity Home Assistant already has.",
+          "cans_nights": "The evenings the trash goes out (the night before pickup).",
+          "recycling_nights": "The evenings recycling goes out.",
+          "recycling_weeks": "Every week, or every other week by ISO week number (check one date on your collection calendar)."
+        }
+      },
+      "reconfigure": {
+        "title": "Change the bot token or channel",
+        "description": "Paste the bot token again (Discord shows it only once) and the channel ID. The integration restarts with them.",
+        "data": {
+          "bot_token": "Discord bot token",
+          "channel_id": "Channel ID"
+        },
+        "data_description": {
+          "bot_token": "From the Bot tab of your application in the Discord Developer Portal.",
+          "channel_id": "Numeric ID of the channel for the chore board. With Developer Mode on, right-click the channel and choose Copy ID."
+        }
+      }
+    },
+    "error": {
+      "invalid_channel": "Channel ID must be all digits."
+    },
+    "abort": {
+      "already_configured": "This Discord channel is already configured.",
+      "reconfigure_successful": "Saved. The bot is restarting with the new settings."
+    }
+  },
+  "options": {
+    "step": {
+      "init": {
+        "description": "Saving either page reloads the integration, which briefly reconnects the bot.",
+        "menu_options": {
+          "chores": "Chores and quick reports",
+          "cans": "Bin watcher"
+        }
+      },
+      "chores": {
+        "description": "Custom chores go one per line as: Name | emoji | every N days | note. Only the name is required, and a custom chore with the same name as a built-in one replaces it. {problems}",
+        "data": {
+          "disabled_chores": "Hide built-in chores",
+          "custom_chores": "Custom chores",
+          "digest": "Move the board to the bottom daily",
+          "digest_time": "Daily board time",
+          "bump_after": "Move the board down after",
+          "quick_reports": "Quick-report buttons"
+        },
+        "data_description": {
+          "disabled_chores": "Ticked chores are left off the board.",
+          "custom_chores": "Example: Clean litter box | 🐈 | 2",
+          "digest": "Re-posts the board once a day (silently) so it isn't buried under chat.",
+          "digest_time": "When the board is re-posted.",
+          "bump_after": "When this many messages from people have pushed the board up, it moves back to the bottom once the channel has been quiet for a minute. 0 turns it off.",
+          "quick_reports": "Up to five chores shown as one-tap buttons on the board. Tapping one flags the chore as needing doing now."
+        }
+      },
+      "cans": {
+        "description": "Everything runs inside Home Assistant: snapshots never leave your network. The easiest way to set the region is to drag it on the Chores page in the sidebar; the numbers below are the same box. Changing the region starts the learning over.",
+        "data": {
+          "cans_enabled": "Watch the bins",
+          "camera_entity": "Camera",
+          "cans_channel_id": "Channel for can snapshots",
+          "roi_left": "Region left edge",
+          "roi_top": "Region top edge",
+          "roi_right": "Region right edge",
+          "roi_bottom": "Region bottom edge",
+          "cans_nights": "Trash nights",
+          "nag_time": "Reminder time",
+          "renag_minutes": "Second reminder after",
+          "nag_mention": "Who to ping",
+          "bin_admins": "Who sees the details",
+          "cans_chore": "Chore to tick when the trash is out",
+          "check_interval": "Look every",
+          "asks_per_day": "Questions per day",
+          "ask_gap_hours": "Gap between questions",
+          "min_labels": "Labels needed of each kind",
+          "min_accuracy": "Self-test score needed",
+          "confidence": "Confidence needed to act",
+          "min_sun_elevation": "Minimum sun elevation",
+          "min_brightness": "Minimum region brightness",
+          "recycling_nights": "Recycling nights",
+          "recycling_weeks": "Recycling weeks",
+          "recycling_chore": "Chore to tick when recycling is out"
+        },
+        "data_description": {
+          "camera_entity": "The doorbell or any camera that can see the curb.",
+          "cans_channel_id": "Leave empty to use the chore board's channel.",
+          "roi_left": "Percent of the picture's width from the left.",
+          "roi_top": "Percent of the picture's height from the top.",
+          "roi_right": "Percent of the picture's width from the left.",
+          "roi_bottom": "Percent of the picture's height from the top.",
+          "cans_nights": "The evenings the trash goes out (the night before pickup).",
+          "nag_time": "On a bin night, look once more at this time and remind about any bin that isn't out.",
+          "renag_minutes": "One follow-up if nobody answered and they still aren't seen out. 0 turns it off.",
+          "nag_mention": "Optional user or role mention, like <@123456789> or <@&987654321>. Whoever claimed the bin's chore is pinged too.",
+          "bin_admins": "Discord user or role ids (or mentions) who get the full working when they tap Check the bins: the snapshot, the region, confidence and buttons to teach it. Everyone else gets a read-only answer. Empty means anyone who can manage the server.",
+          "cans_chore": "Marked done automatically when the trash is seen or reported out on a trash night.",
+          "check_interval": "How often to take a snapshot in daylight.",
+          "asks_per_day": "Most snapshots per day posted asking what you see. One extra is allowed on a cans-out night.",
+          "ask_gap_hours": "Least time between two questions.",
+          "min_labels": "The bot doesn't act on its own guesses until it has at least this many 'out' and 'not out' answers.",
+          "min_accuracy": "And until it predicts its own past answers at least this well (leave-one-out).",
+          "confidence": "Once trusted, a guess below this is treated as unsure (it asks instead of acting).",
+          "min_sun_elevation": "Only look when the sun is at least this high (degrees).",
+          "min_brightness": "Skip a snapshot whose region is darker than this (0-255).",
+          "recycling_nights": "The evenings recycling goes out.",
+          "recycling_weeks": "Every week, or every other week by ISO week number.",
+          "recycling_chore": "Marked done automatically when recycling is seen or reported out on a recycling night."
+        }
+      }
+    },
+    "error": {
+      "bad_custom": "Some lines couldn't be read: see the description.",
+      "camera_required": "Pick a camera to watch the cans.",
+      "invalid_channel": "Channel ID must be all digits.",
+      "too_many_quick": "Pick at most five quick-report buttons."
+    }
+  },
+  "entity": {
+    "sensor": {
+      "overdue": {
+        "name": "Overdue"
+      },
+      "trash_bin": {
+        "name": "Trash bin",
+        "state": {
+          "out": "Out",
+          "not_out": "Not out",
+          "unsure": "Not sure",
+          "dark": "Too dark",
+          "unknown": "Not checked"
+        }
+      },
+      "recycling_bin": {
+        "name": "Recycling bin",
+        "state": {
+          "out": "Out",
+          "not_out": "Not out",
+          "unsure": "Not sure",
+          "dark": "Too dark",
+          "unknown": "Not checked"
+        }
+      }
+    },
+    "button": {
+      "post_board": {
+        "name": "Post board"
+      },
+      "check_cans": {
+        "name": "Check bins"
+      },
+      "preview_region": {
+        "name": "Preview region"
+      }
+    }
+  },
+  "exceptions": {
+    "not_loaded": {
+      "message": "The Chores Discord Bot isn't loaded."
+    },
+    "unknown_chore": {
+      "message": "There's no chore called {chore}."
+    }
+  },
+  "services": {
+    "post_board": {
+      "name": "Post board",
+      "description": "Posts the chore board again at the bottom of the channel."
+    },
+    "mark_done": {
+      "name": "Mark done",
+      "description": "Marks a chore done, for automations (a robot vacuum finishing, say).",
+      "fields": {
+        "chore": {
+          "name": "Chore",
+          "description": "The chore's name or key, like dishes or Trash-Ext."
+        },
+        "who": {
+          "name": "Who",
+          "description": "Shown on the board as who did it."
+        }
+      }
+    },
+    "check_cans": {
+      "name": "Check bins",
+      "description": "Takes a snapshot now and posts it asking whether the trash and recycling are out."
+    },
+    "preview_region": {
+      "name": "Preview region",
+      "description": "Posts a snapshot with the region the bot compares drawn on it."
+    },
+    "reset_cans_model": {
+      "name": "Reset bin learning",
+      "description": "Forgets every bin label (trash and recycling) and starts learning from scratch."
+    }
+  }
+}

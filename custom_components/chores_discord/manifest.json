@@ -1,0 +1,29 @@
+{
+  "domain": "chores_discord",
+  "name": "Chores Discord Bot",
+  "after_dependencies": [
+    "camera",
+    "sun"
+  ],
+  "codeowners": [
+    "@keyxmakerx"
+  ],
+  "config_flow": true,
+  "dependencies": [
+    "frontend",
+    "http",
+    "panel_custom",
+    "websocket_api"
+  ],
+  "documentation": "https://github.com/keyxmakerx/Choresbot",
+  "integration_type": "service",
+  "iot_class": "local_polling",
+  "issue_tracker": "https://github.com/keyxmakerx/Choresbot/issues",
+  "loggers": [
+    "discord"
+  ],
+  "requirements": [
+    "discord.py==2.7.1"
+  ],
+  "version": "0.3.0"
+}
