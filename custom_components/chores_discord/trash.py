@@ -16,6 +16,20 @@ LABEL_OUT = "out"
 LABEL_IN = "in"
 LABELS = (LABEL_OUT, LABEL_IN)
 
+# The bins the camera learns, each with its own references and nights. They
+# share one region (they stand together at the curb) but are judged apart:
+# "recycling out" is learned from the recycling answers only.
+BIN_TRASH = "trash"
+BIN_RECYCLING = "recycling"
+BINS = (BIN_TRASH, BIN_RECYCLING)
+BIN_NAME = {BIN_TRASH: "Trash", BIN_RECYCLING: "Recycling"}
+BIN_EMOJI = {BIN_TRASH: "🗑️", BIN_RECYCLING: "♻️"}
+
+# Which weeks a bin goes out (recycling is often every other week).
+WEEKS_EVERY = "every"
+WEEKS_EVEN = "even"
+WEEKS_ODD = "odd"
+
 HOUR = 3600.0
 DAY = 86400.0
 
@@ -109,9 +123,25 @@ def parse_time(value: str | time | None, fallback: time) -> time:
         return fallback
 
 
-def is_cans_night(local: datetime, nights: list[int] | tuple[int, ...]) -> bool:
-    """Whether today (local) is a night the cans should go out."""
-    return local.weekday() in set(nights)
+def is_cans_night(
+    local: datetime, nights: list[int] | tuple[int, ...], weeks: str = WEEKS_EVERY
+) -> bool:
+    """Whether today (local) is a night this bin should go out.
+
+    ``weeks`` even/odd uses the ISO week number, which the person can check
+    against the collection calendar once and then forget.
+    """
+    if local.weekday() not in set(nights):
+        return False
+    if weeks == WEEKS_EVERY:
+        return True
+    week = local.isocalendar().week
+    return (week % 2 == 0) == (weeks == WEEKS_EVEN)
+
+
+def ref_bin(ref: dict) -> str:
+    """A reference's bin; references from before recycling existed are trash."""
+    return ref.get("bin") or BIN_TRASH
 
 
 def night_key(local: datetime) -> str:
@@ -179,16 +209,17 @@ def new_sample_id() -> str:
 
 
 def add_reference(refs: list[dict], ref: dict) -> list[dict]:
-    """Append a labelled reference, keeping the newest per label up to the cap."""
+    """Append a labelled reference, keeping the newest per bin and label."""
     refs = refs + [ref]
     kept: list[dict] = []
-    seen = {label: 0 for label in LABELS}
+    seen: dict[tuple[str, str], int] = {}
     for item in reversed(refs):
         label = item.get("label")
-        if label in seen:
-            if seen[label] >= REFS_PER_LABEL:
+        if label in LABELS:
+            key = (ref_bin(item), label)
+            if seen.get(key, 0) >= REFS_PER_LABEL:
                 continue
-            seen[label] += 1
+            seen[key] = seen.get(key, 0) + 1
         kept.append(item)
     kept.reverse()
     return kept
@@ -203,5 +234,11 @@ def prune_pending(pending: dict[str, dict], now: float) -> dict[str, dict]:
     return dict(newest)
 
 
-def label_counts(refs: list[dict]) -> dict[str, int]:
-    return {label: sum(1 for r in refs if r.get("label") == label) for label in LABELS}
+def label_counts(refs: list[dict], bin_name: str | None = None) -> dict[str, int]:
+    """Counts per label, for one bin when ``bin_name`` is given."""
+    picked = [r for r in refs if bin_name is None or ref_bin(r) == bin_name]
+    return {label: sum(1 for r in picked if r.get("label") == label) for label in LABELS}
+
+
+def for_bin(refs: list[dict], bin_name: str) -> list[dict]:
+    return [r for r in refs if ref_bin(r) == bin_name]

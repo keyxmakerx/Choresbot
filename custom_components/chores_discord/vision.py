@@ -262,3 +262,37 @@ def leave_one_out(refs: list[dict], k: int = 5, limit: int = 120) -> float | Non
         if classify(others, ref["features"], k).label == ref["label"]:
             correct += 1
     return round(correct / len(sample), 3)
+
+
+def loo_details(refs: list[dict], k: int = 5, limit: int = 120) -> dict[int, Prediction]:
+    """For the newest ``limit`` refs: what the rest of the set would call each.
+
+    Keyed by index into ``refs``. The training page uses it to flag samples
+    the model disagrees with (often a mislabel, or a shot worth deleting).
+    """
+    start = max(0, len(refs) - limit)
+    out: dict[int, Prediction] = {}
+    for index in range(start, len(refs)):
+        others = refs[start:index] + refs[index + 1 :]
+        out[index] = classify(others, refs[index]["features"], k)
+    return out
+
+
+def thumbnail(jpeg: bytes, width: int = 220) -> bytes:
+    """A small JPEG for the training page's sample grid."""
+    img = Image.open(io.BytesIO(jpeg)).convert("RGB")
+    if img.width > width:
+        img = img.resize((width, max(1, int(img.height * width / img.width))), Image.Resampling.BILINEAR)
+    buf = io.BytesIO()
+    img.save(buf, format="JPEG", quality=80)
+    return buf.getvalue()
+
+
+def frame(image_bytes: bytes, width: int = 960) -> bytes:
+    """The whole snapshot, downscaled, for the training page's live view."""
+    img = _open(image_bytes)
+    if img.width > width:
+        img = img.resize((width, max(1, int(img.height * width / img.width))), Image.Resampling.BILINEAR)
+    buf = io.BytesIO()
+    img.save(buf, format="JPEG", quality=82)
+    return buf.getvalue()

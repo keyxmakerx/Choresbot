@@ -1,8 +1,9 @@
-"""End-to-end: the coordinator learning cans from Discord answers, then nagging.
+"""End-to-end: the coordinator learning both bins from answers, then nagging.
 
 Imports the integration normally; only the camera, the Store, the Discord
-client and HA's timers are replaced. Needs homeassistant and discord.py
-installed. Runnable with plain python3.
+client and HA's timers are replaced. The cards are real discord.py
+Components V2 views, checked against Discord's component limits. Needs
+homeassistant and discord.py installed. Runnable with plain python3.
 """
 
 from __future__ import annotations
@@ -20,6 +21,50 @@ sys.path.insert(0, HERE)
 from custom_components.chores_discord import coordinator as coord_mod  # noqa: E402
 from custom_components.chores_discord import const, trash  # noqa: E402
 import test_vision as scenes  # noqa: E402
+
+# Discord's limit for a Components V2 message, nested components included.
+MAX_COMPONENTS = 40
+
+
+def _count(components) -> int:
+    total = 0
+    for comp in components:
+        total += 1
+        for key in ("components",):
+            if key in comp:
+                total += _count(comp[key])
+        if "accessory" in comp:
+            total += 1
+    return total
+
+
+def _text(view) -> str:
+    """Every text display and button label in a card, for assertions."""
+    out = []
+
+    def walk(items):
+        for comp in items:
+            if comp.get("content"):
+                out.append(comp["content"])
+            if comp.get("label"):
+                out.append(comp["label"])
+            walk(comp.get("components", []))
+
+    walk(view.to_components())
+    return "\n".join(out)
+
+
+def _custom_ids(view) -> list[str]:
+    ids = []
+
+    def walk(items):
+        for comp in items:
+            if comp.get("custom_id"):
+                ids.append(comp["custom_id"])
+            walk(comp.get("components", []))
+
+    walk(view.to_components())
+    return ids
 
 
 class FakeState:
@@ -61,50 +106,49 @@ class FakeStore:
         self.saved = data
 
 
-class FakeMessage:
-    def __init__(self, bot, mid, kwargs) -> None:
-        self.id = mid
-        self.kwargs = kwargs
-        self.embeds = [kwargs["embed"]] if kwargs.get("embed") else []
-        self.bot = bot
-
-    async def edit(self, embed=None, view=None):
-        self.embeds = [embed]
-        self.bot.edits.append((self.id, embed, view))
-
-
 class FakeBot:
     is_ready = True
 
     def __init__(self) -> None:
         self.posts: list[dict] = []
-        self.messages: dict[int, FakeMessage] = {}
+        self.views: dict[int, object] = {}
         self.edits: list = []
 
-    async def async_post(self, channel_id, **kwargs):
+    async def async_post(self, channel_id, view, *, files=None, silent=True, mention=False):
         mid = 1000 + len(self.posts)
-        kwargs["channel_id"] = channel_id
-        self.posts.append(kwargs)
-        self.messages[mid] = FakeMessage(self, mid, kwargs)
+        count = _count(view.to_components())
+        assert count <= MAX_COMPONENTS, count
+        self.posts.append({"id": mid, "view": view, "files": files, "silent": silent,
+                           "mention": mention, "text": _text(view)})
+        self.views[mid] = view
         return mid
 
-    async def async_fetch(self, channel_id, message_id):
-        return self.messages[message_id]
+    async def async_edit(self, channel_id, message_id, view):
+        assert _count(view.to_components()) <= MAX_COMPONENTS
+        self.views[message_id] = view
+        self.edits.append(message_id)
 
-    async def async_edit(self, channel_id, message_id, *, embed, view=None):
-        await self.messages[message_id].edit(embed=embed, view=view)
+    async def async_edit_keeping(self, channel_id, message_id, build, filename="cans.jpg"):
+        view = build("https://cdn.example/cans.jpg")
+        if view is not None:
+            await self.async_edit(channel_id, message_id, view)
 
     async def async_delete(self, channel_id, message_id):
-        self.messages.pop(message_id, None)
+        self.views.pop(message_id, None)
 
 
 class Camera:
-    cans = False
+    trash = False
+    recycling = False
     seed = 0
 
     async def snap(self, hass, entity_id):
         Camera.seed += 1
-        return scenes.scene(Camera.cans, 5000 + Camera.seed)
+        return scenes.scene(Camera.trash, 5000 + Camera.seed, recycling=Camera.recycling)
+
+
+def _no_timer(*_args, **_kwargs):
+    return lambda: None
 
 
 def _coordinator(root: str):
@@ -112,115 +156,138 @@ def _coordinator(root: str):
         entry_id="e1",
         data={const.CONF_BOT_TOKEN: "x", const.CONF_CHANNEL_ID: "111"},
         options={
-            const.CONF_CANS_ENABLED: True,
             const.CONF_CAMERA: "camera.doorbell",
+            const.CONF_CANS_ENABLED: True,
             const.CONF_ROI_LEFT: scenes.ROI[0] * 100,
             const.CONF_ROI_TOP: scenes.ROI[1] * 100,
             const.CONF_ROI_RIGHT: scenes.ROI[2] * 100,
             const.CONF_ROI_BOTTOM: scenes.ROI[3] * 100,
-            const.CONF_CANS_NIGHTS: list(range(7)),  # every night, so "today" counts
+            const.CONF_CANS_NIGHTS: list(range(7)),
+            const.CONF_RECYCLING_NIGHTS: list(range(7)),
             const.CONF_NAG_MENTION: "<@42>",
         },
     )
-    hass = FakeHass(root)
-    coord = coord_mod.ChoresCoordinator(hass, entry)
+    coord = coord_mod.ChoresCoordinator(FakeHass(root), entry)
     coord._store = FakeStore()
     coord._bot = FakeBot()
     coord._signal = lambda: None
     return coord
 
 
-async def _label_latest(coord, label: str, who="Key"):
-    sid = next(reversed(coord.state["cans"]["pending"]))
-    return await coord.async_label(sid, label, who, 7, None)
-
-
-def _no_timer(*_args, **_kwargs):
-    return lambda: None
-
-
 async def scenario() -> None:
     coord_mod._snapshot = Camera().snap
-    # HA's timers need a running hass; the scenario calls the ticks directly.
     coord_mod.async_track_time_interval = _no_timer
     coord_mod.async_track_time_change = _no_timer
     coord_mod.async_call_later = _no_timer
     with tempfile.TemporaryDirectory() as root:
         coord = _coordinator(root)
         await coord.async_setup()
-        for unsub in coord._unsubs:
-            unsub()
-        coord._unsubs.clear()
-        assert coord.model.phase == trash.PHASE_EMPTY
+        bot = coord._bot
 
-        # Board posts and marks chores.
+        # The board: one card, quick reports, chore menus.
         await coord.async_update_board()
-        assert coord.state["board"]["message_id"] == 1000
-        assert await coord.async_mark_done("Trash-Ext", "Key", 7)
-        assert "Trash-Ext" in coord.board_embed().description
+        board = bot.posts[0]
+        ids = _custom_ids(board["view"])
+        assert "chores:quick:trash" in ids and "chores:quick:recycling" in ids, ids
+        assert "chores:board:done" in ids and "chores:board:check" in ids
+        assert "Recycling" in board["text"] and "Trash-Ext" in board["text"]
 
-        # Learning: every manual check posts a snapshot with label buttons.
-        for i in range(6):
-            for cans in (True, False):
-                Camera.cans = cans
+        # A quick report puts the chore at the top, flagged with who said so.
+        await coord.async_report("recycling", "Sam")
+        text = _text(coord.board_layout())
+        assert "Needs doing" in text and "Sam says it needs doing" in text, text
+        assert await coord.async_mark_done("recycling", "Alex", 3)
+        assert "Sam says" not in _text(coord.board_layout())
+
+        # Learning: each manual look posts one card asking about both bins.
+        combos = [(True, True), (True, False), (False, True), (False, False)]
+        for round_ in range(4):
+            for trash_out, recycling_out in combos:
+                Camera.trash, Camera.recycling = trash_out, recycling_out
                 text = await coord.async_check_cans(manual=True)
                 assert "Posted the snapshot" in text, text
-                embed, reply = await _label_latest(coord, "out" if cans else "in")
-                assert "learned" in reply
-        assert coord.model.ready, coord.model
-        assert os.listdir(os.path.join(root, const.SAMPLES_DIR, "out"))
+                sid = next(reversed(coord.state["cans"]["pending"]))
+                card = bot.posts[-1]
+                assert card["files"][0][0] == "cans.jpg"
+                assert f"chores:cans:trash:out:{sid}" in _custom_ids(card["view"])
+                reply = await coord.async_label(sid, "trash", "out" if trash_out else "in", "Key", 7)
+                assert "learned" in reply, reply
+                # The card re-renders with the answer and only recycling left to ask.
+                left = _custom_ids(bot.views[card["id"]])
+                assert f"chores:cans:recycling:out:{sid}" in left and f"chores:cans:trash:out:{sid}" not in left
+                await coord.async_label(sid, "recycling", "out" if recycling_out else "in", "Key", 7)
+                assert coord.state["cans"]["pending"][sid]["closed"]
+                assert not any(i.startswith("chores:cans:") for i in _custom_ids(bot.views[card["id"]]))
+        assert coord.models["trash"].ready, coord.models
+        assert coord.models["recycling"].ready, coord.models
+        assert len(os.listdir(os.path.join(root, const.SAMPLES_DIR, "samples"))) == 16
 
-        # A label can't be given twice.
-        assert await coord.async_label("deadbeef", "out", "Key", 7, None) is None
+        # An answer can't be given twice, and unknown samples are refused.
+        assert await coord.async_label(sid, "trash", "out", "Key", 7) is None
+        assert await coord.async_label("deadbeef", "trash", "out", "Key", 7) is None
 
-        # Cans night, cans not out: a nag that pings, with the "they're out" button.
-        Camera.cans = False
-        coord.state["cans"]["night"] = None
-        posts_before = len(coord._bot.posts)
-        await coord.async_cans_night(force=True)
-        nag = coord._bot.posts[-1]
-        assert len(coord._bot.posts) == posts_before + 1
-        assert nag["silent"] is False and nag["content"] == "<@42>", nag
-        assert "aren't out" in nag["embed"].title
-        night = coord.state["cans"]["night"]
-        assert night["resolved"] is None
+        # Bin night: trash out, recycling not. Only recycling is nagged.
+        Camera.trash, Camera.recycling = True, False
+        coord.state["cans"]["nights"] = {}
+        before = len(bot.posts)
+        await coord.async_cans_night(bins=["trash", "recycling"])
+        assert coord.state["cans"]["nights"]["trash"]["resolved"] == "out"
+        assert coord.state["chores"]["trash"]["last_by"] == "📷 the camera"
+        nag = bot.posts[-1]
+        assert len(bot.posts) == before + 1
+        assert nag["silent"] is False and nag["mention"] and "<@42>" in nag["text"], nag
+        assert "not out yet" in nag["text"] and "✅ out" in nag["text"], nag["text"]
+        key = coord.state["cans"]["nag"]["key"]
+        assert f"chores:nag:recycling:out:{key}" in _custom_ids(nag["view"])
+        assert f"chores:nag:trash:out:{key}" not in _custom_ids(nag["view"])
 
-        # Someone taps "They're out": resolved, Trash ticked on the board.
-        embed = await coord.async_nag_action(night["key"], "out", "Sam", 9, nag["embed"])
-        assert "Sam" in embed.description
-        assert coord.state["chores"]["trash"]["last_by"] == "Sam"
-        # The follow-up stays quiet once resolved.
-        await coord._renag_later(night["key"])(None)
-        assert len(coord._bot.posts) == posts_before + 1
+        # Someone taps "Recycling is out": resolved and the chore ticked.
+        assert await coord.async_nag_action(key, "recycling", "out", "Sam", 9)
+        assert coord.state["chores"]["recycling"]["last_by"] == "Sam"
+        assert not _custom_ids(coord.nag_layout(key, None))[:1] or all(
+            not i.startswith("chores:nag:") for i in _custom_ids(coord.nag_layout(key, None))
+        )
+        # The follow-up stays quiet once everything is resolved.
+        await coord._renag_later(key)(None)
+        assert len(bot.posts) == before + 1
 
-        # Next cans night, cans already out: the camera resolves it, no post.
-        coord.state["cans"]["night"] = None
-        Camera.cans = True
-        posts_before = len(coord._bot.posts)
-        await coord.async_cans_night(force=True)
-        new_posts = coord._bot.posts[posts_before:]
-        assert all(p.get("content") != "<@42>" for p in new_posts), new_posts
-        assert coord.state["cans"]["night"]["resolved"] == "out"
-
-        # After dark: no judgement, and the reminder asks instead of nagging.
-        coord.state["cans"]["night"] = None
-        coord.hass.states.elevation = -5
+        # After dark: nothing is judged, and the reminder asks instead of nagging.
+        coord.state["cans"]["nights"] = {}
+        coord.state["cans"]["last"] = None
         coord._last_crop = None
-        coord.state["cans"]["last"] = None  # nothing seen in daylight today
-        Camera.cans = False
+        coord.hass.states.elevation = -5
         assert "Sun's down" in await coord.async_check_cans(manual=False)
-        await coord.async_cans_night(force=True)
-        ask = coord._bot.posts[-1]
-        assert "are the cans out?" in ask["embed"].title
-        assert not ask.get("files")  # no usable picture at night
+        await coord.async_cans_night(bins=["trash"])
+        ask = bot.posts[-1]
+        assert "is it out?" in ask["text"], ask["text"]
+        assert not ask["files"]
+
+        # The training page: samples with model opinions, relabel and delete.
+        coord.hass.states.elevation = 30
+        samples = await coord.async_panel_samples()
+        assert len(samples) == 32 and all(s["thumb"] for s in samples)
+        target = samples[0]
+        flipped = "in" if target["label"] == "out" else "out"
+        assert await coord.async_panel_relabel(target["id"], flipped)
+        again = {s["id"]: s for s in await coord.async_panel_samples()}
+        assert again[target["id"]]["label"] == flipped
+        assert again[target["id"]]["model_says"] == target["label"]  # it now disagrees
+        assert await coord.async_panel_delete(target["id"])
+        assert len(await coord.async_panel_samples()) == 31
+        snap = await coord.async_panel_snapshot()
+        assert snap["sid"] and snap["frame"] and set(snap["verdicts"]) == {"trash", "recycling"}
+        overview = await coord.async_panel_overview()
+        assert overview["bins"]["recycling"]["ready"] and overview["pending"][0]["sid"] == snap["sid"]
+        assert await coord.async_label(snap["sid"], "trash", "out", "Key", None)
 
         # Changing the region sets learning aside (references remember theirs).
         coord.roi_key = "0.000,0.000,0.500,0.500"
-        await coord._async_refresh_model()
-        assert coord.model.phase == trash.PHASE_EMPTY
+        await coord._async_refresh_models()
+        assert coord.models["trash"].phase == trash.PHASE_EMPTY
 
         await coord.async_reset_cans()
         assert coord.state["cans"]["refs"] == []
+        assert os.listdir(os.path.join(root, const.SAMPLES_DIR, "samples")) == []
         print("ok  scenario")
 
 

@@ -109,6 +109,33 @@ def test_board_orders_by_urgency() -> None:
     assert {c.key for c in chores.needing_attention(cat, state, T0 + 3600)} == {"b", "c"}
 
 
+def test_quick_reports() -> None:
+    state: dict = {}
+    cat = chores.catalogue()
+    assert [c.key for c in chores.quick_chores(cat, chores.DEFAULT_QUICK)] == list(chores.DEFAULT_QUICK)
+    assert chores.short_name("Wipe counters") == "Counters" and chores.short_name("Trash") == "Trash"
+    trash = next(c for c in cat if c.key == "trash")
+    chores.mark_done(state, "trash", T0, "Alex", 2)
+    assert chores.report(state, "trash", T0 + 60, "Sam") is True
+    assert chores.report(state, "trash", T0 + 70, "Key") is False  # already flagged
+    assert chores.status(trash, chores.entry(state, "trash"), T0 + 80)[0] == chores.REPORTED
+    sections = dict(chores.board_sections(cat, state, T0 + 80))
+    assert any("Sam says it needs doing" in line for line in sections["Needs doing"])
+    assert chores.worst(cat, state, T0 + 80) == chores.REPORTED
+    chores.mark_done(state, "trash", T0 + 90, "Sam", 1)
+    assert chores.reporter(chores.entry(state, "trash"), T0 + 100) is None
+    chores.report(state, "trash", T0, "Sam")
+    assert chores.reporter(chores.entry(state, "trash"), T0 + chores.REPORT_TTL + 1) is None
+
+
+def test_claimed_section() -> None:
+    state: dict = {}
+    cat = chores.catalogue()
+    chores.toggle_claim(state, "dishes", T0, "Alex", 3)
+    sections = dict(chores.board_sections(cat, state, T0 + 10))
+    assert any("Dishes" in line for line in sections["Claimed"])
+
+
 if __name__ == "__main__":
     tests = [v for k, v in sorted(globals().items()) if k.startswith("test_")]
     for test in tests:

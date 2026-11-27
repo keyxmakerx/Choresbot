@@ -9,6 +9,12 @@
     "@keyxmakerx"
   ],
   "config_flow": true,
+  "dependencies": [
+    "frontend",
+    "http",
+    "panel_custom",
+    "websocket_api"
+  ],
   "documentation": "https://github.com/keyxmakerx/Choresbot",
   "integration_type": "service",
   "iot_class": "local_polling",
@@ -19,5 +25,5 @@
   "requirements": [
     "discord.py==2.7.1"
   ],
-  "version": "0.1.0"
+  "version": "0.2.0"
 }

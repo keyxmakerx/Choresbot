@@ -22,6 +22,7 @@ CONF_CUSTOM_CHORES = "custom_chores"
 CONF_DISABLED_CHORES = "disabled_chores"
 CONF_DIGEST_TIME = "digest_time"
 CONF_DIGEST = "digest"
+CONF_QUICK = "quick_reports"
 
 DEFAULT_CUSTOM_CHORES = ""
 DEFAULT_DIGEST_TIME = "09:00:00"
@@ -36,6 +37,9 @@ CONF_ROI_TOP = "roi_top"
 CONF_ROI_RIGHT = "roi_right"
 CONF_ROI_BOTTOM = "roi_bottom"
 CONF_CANS_NIGHTS = "cans_nights"
+CONF_RECYCLING_NIGHTS = "recycling_nights"
+CONF_RECYCLING_WEEKS = "recycling_weeks"
+CONF_RECYCLING_CHORE = "recycling_chore"
 CONF_NAG_TIME = "nag_time"
 CONF_RENAG = "renag_minutes"
 CONF_CHECK_INTERVAL = "check_interval"
@@ -47,13 +51,15 @@ CONF_CONFIDENCE = "confidence"
 CONF_MIN_ELEVATION = "min_sun_elevation"
 CONF_MIN_BRIGHTNESS = "min_brightness"
 CONF_CANS_CHORE = "cans_chore"
-CONF_SAVE_SAMPLES = "save_samples"
 CONF_NAG_MENTION = "nag_mention"
 
 DEFAULT_CANS_ENABLED = False
 # The region as percentages of the frame: a guess at "far right, lower half".
 DEFAULT_ROI = (70.0, 50.0, 95.0, 85.0)
 DEFAULT_CANS_NIGHTS: list[str] = []
+DEFAULT_RECYCLING_NIGHTS: list[str] = []
+DEFAULT_RECYCLING_WEEKS = "every"
+DEFAULT_RECYCLING_CHORE = "recycling"
 DEFAULT_NAG_TIME = "19:00:00"
 DEFAULT_RENAG = 60
 DEFAULT_CHECK_INTERVAL = 30
@@ -65,7 +71,6 @@ DEFAULT_CONFIDENCE = 75
 DEFAULT_MIN_ELEVATION = 3.0
 DEFAULT_MIN_BRIGHTNESS = 35
 DEFAULT_CANS_CHORE = "trash"
-DEFAULT_SAVE_SAMPLES = True
 
 NO_CHORE = "none"
 
@@ -73,18 +78,27 @@ MIN_CHECK_INTERVAL, MAX_CHECK_INTERVAL = 5, 240
 MAX_RENAG = 240
 MAX_ASKS_PER_DAY = 10
 
-# Saved crops (for inspection and as a backup of the labels), per label.
+# Crops of every snapshot asked about, for the training page:
+# /config/chores_discord/samples/<sid>.jpg. Unreferenced ones are cleaned up.
 SAMPLES_DIR = DOMAIN
-SAMPLES_KEEP = 200
+
+# The training page in the sidebar.
+PANEL_URL = "chores-training"
+PANEL_COMPONENT = "chores-training-panel"
+PANEL_STATIC = "/chores_discord_static"
 
 # --- Discord custom ids ---
-BOARD_DONE_ID = "chores:board:done"
-BOARD_CLAIM_ID = "chores:board:claim"
-BOARD_REFRESH_ID = "chores:board:refresh"
-BOARD_CANS_ID = "chores:board:cans"
-# Label and nag buttons carry their sample / night in the id (DynamicItem).
-CANS_LABEL_TEMPLATE = r"chores:cans:(?P<label>out|in|skip):(?P<sid>[0-9a-f]{1,24})"
-CANS_NAG_TEMPLATE = r"chores:nag:(?P<action>out|skip):(?P<night>\d{4}-\d{2}-\d{2})"
+# Every control is a DynamicItem: what it acts on rides in its custom id, so
+# taps on any message ever posted route correctly after a restart.
+BOARD_SELECT_TEMPLATE = r"chores:board:(?P<what>done|claim)"
+BOARD_BUTTON_TEMPLATE = r"chores:board:(?P<what>refresh|check)"
+QUICK_TEMPLATE = r"chores:quick:(?P<key>[a-z0-9_]{1,60})"
+CANS_LABEL_TEMPLATE = (
+    r"chores:cans:(?P<bin>trash|recycling|all):(?P<label>out|in|skip):(?P<sid>[0-9a-f]{1,24})"
+)
+CANS_NAG_TEMPLATE = (
+    r"chores:nag:(?P<bin>trash|recycling|all):(?P<action>out|skip):(?P<night>\d{4}-\d{2}-\d{2})"
+)
 
 # --- Services ---
 SERVICE_POST_BOARD = "post_board"

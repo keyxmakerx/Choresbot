@@ -20,6 +20,7 @@ from .const import (
     SERVICE_RESET_CANS,
 )
 from .coordinator import ChoresConfigEntry, ChoresCoordinator
+from .panel import async_remove_panel, async_setup_panel
 
 CONFIG_SCHEMA = cv.config_entry_only_config_schema(DOMAIN)
 
@@ -40,12 +41,19 @@ async def async_setup_entry(hass: HomeAssistant, entry: ChoresConfigEntry) -> bo
     entry.async_create_background_task(hass, coordinator.async_run_bot(), f"{DOMAIN}_bot")
     await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
     entry.async_on_unload(entry.add_update_listener(_async_update_listener))
+    await async_setup_panel(hass)
     return True
 
 
 async def async_unload_entry(hass: HomeAssistant, entry: ChoresConfigEntry) -> bool:
     unload_ok = await hass.config_entries.async_unload_platforms(entry, PLATFORMS)
     await entry.runtime_data.async_shutdown()
+    others = [
+        e for e in hass.config_entries.async_entries(DOMAIN)
+        if e.entry_id != entry.entry_id and e.state is ConfigEntryState.LOADED
+    ]
+    if not others:
+        async_remove_panel(hass)
     return unload_ok
 
 

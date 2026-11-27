@@ -21,7 +21,8 @@ async def async_setup_entry(
     coordinator = entry.runtime_data
     entities: list[SensorEntity] = [OverdueSensor(coordinator, entry, "overdue")]
     if coordinator.cans_enabled:
-        entities.append(CansSensor(coordinator, entry, "trash_cans"))
+        for bin_name in trash.BINS:
+            entities.append(BinSensor(coordinator, entry, f"{bin_name}_bin", bin_name))
     async_add_entities(entities)
 
 
@@ -39,17 +40,20 @@ class OverdueSensor(ChoresEntity, SensorEntity):
         return {"chores": [c.name for c in self.coordinator.overdue()]}
 
 
-class CansSensor(ChoresEntity, SensorEntity):
-    """out / not_out / unsure / dark / unknown, from the latest look."""
+class BinSensor(ChoresEntity, SensorEntity):
+    """out / not_out / unsure / dark / unknown for one bin, from the latest look."""
 
     _attr_device_class = SensorDeviceClass.ENUM
     _attr_options = _CANS_STATES
 
+    def __init__(self, coordinator, entry, key: str, bin_name: str) -> None:
+        super().__init__(coordinator, entry, key)
+        self._bin = bin_name
+
     @property
     def native_value(self) -> str:
-        last = self.coordinator.state["cans"].get("last") or {}
-        return last.get("result", trash.UNKNOWN)
+        return self.coordinator.bin_state(self._bin)
 
     @property
     def extra_state_attributes(self) -> dict:
-        return self.coordinator.cans_attributes()
+        return self.coordinator.bin_attributes(self._bin)

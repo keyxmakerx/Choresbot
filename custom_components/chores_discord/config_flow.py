@@ -43,7 +43,10 @@ from .const import (
     CONF_ROI_LEFT,
     CONF_ROI_RIGHT,
     CONF_ROI_TOP,
-    CONF_SAVE_SAMPLES,
+    CONF_QUICK,
+    CONF_RECYCLING_CHORE,
+    CONF_RECYCLING_NIGHTS,
+    CONF_RECYCLING_WEEKS,
     DEFAULT_ASK_GAP,
     DEFAULT_ASKS_PER_DAY,
     DEFAULT_CANS_CHORE,
@@ -61,7 +64,9 @@ from .const import (
     DEFAULT_NAG_TIME,
     DEFAULT_RENAG,
     DEFAULT_ROI,
-    DEFAULT_SAVE_SAMPLES,
+    DEFAULT_RECYCLING_CHORE,
+    DEFAULT_RECYCLING_NIGHTS,
+    DEFAULT_RECYCLING_WEEKS,
     DOMAIN,
     MAX_ASKS_PER_DAY,
     MAX_CHECK_INTERVAL,
@@ -91,10 +96,21 @@ def _select(options: list[tuple[str, str]], *, multiple: bool = False):
     )
 
 
+def _weekdays():
+    return _select([(str(i), name) for i, name in enumerate(WEEKDAYS)], multiple=True)
+
+
+def _weeks():
+    return _select([("every", "Every week"), ("even", "Even weeks"), ("odd", "Odd weeks")])
+
+
 class ChoresConfigFlow(ConfigFlow, domain=DOMAIN):
-    """Ask for the bot token and the channel; everything else is options."""
+    """Bot token and channel, then (optionally) the camera and bin nights."""
 
     VERSION = 1
+
+    def __init__(self) -> None:
+        self._data: dict[str, Any] = {}
 
     async def async_step_user(self, user_input: dict[str, Any] | None = None) -> ConfigFlowResult:
         errors: dict[str, str] = {}
@@ -105,10 +121,8 @@ class ChoresConfigFlow(ConfigFlow, domain=DOMAIN):
             else:
                 await self.async_set_unique_id(channel_id)
                 self._abort_if_unique_id_configured()
-                return self.async_create_entry(
-                    title="Chores Discord Bot",
-                    data={CONF_BOT_TOKEN: user_input[CONF_BOT_TOKEN], CONF_CHANNEL_ID: channel_id},
-                )
+                self._data = {CONF_BOT_TOKEN: user_input[CONF_BOT_TOKEN], CONF_CHANNEL_ID: channel_id}
+                return await self.async_step_camera()
         schema = vol.Schema(
             {
                 vol.Required(CONF_BOT_TOKEN): selector.TextSelector(
@@ -118,6 +132,30 @@ class ChoresConfigFlow(ConfigFlow, domain=DOMAIN):
             }
         )
         return self.async_show_form(step_id="user", data_schema=schema, errors=errors)
+
+    async def async_step_camera(self, user_input: dict[str, Any] | None = None) -> ConfigFlowResult:
+        """Pick one of Home Assistant's cameras for the bins (or skip)."""
+        if user_input is not None:
+            camera = user_input.get(CONF_CAMERA) or ""
+            options = {
+                CONF_CANS_ENABLED: bool(camera),
+                CONF_CAMERA: camera,
+                CONF_CANS_NIGHTS: [int(d) for d in user_input.get(CONF_CANS_NIGHTS, [])],
+                CONF_RECYCLING_NIGHTS: [int(d) for d in user_input.get(CONF_RECYCLING_NIGHTS, [])],
+                CONF_RECYCLING_WEEKS: user_input.get(CONF_RECYCLING_WEEKS, DEFAULT_RECYCLING_WEEKS),
+            }
+            return self.async_create_entry(title="Chores Discord Bot", data=self._data, options=options)
+        schema = vol.Schema(
+            {
+                vol.Optional(CONF_CAMERA): selector.EntitySelector(
+                    selector.EntitySelectorConfig(domain="camera")
+                ),
+                vol.Optional(CONF_CANS_NIGHTS, default=[]): _weekdays(),
+                vol.Optional(CONF_RECYCLING_NIGHTS, default=[]): _weekdays(),
+                vol.Required(CONF_RECYCLING_WEEKS, default=DEFAULT_RECYCLING_WEEKS): _weeks(),
+            }
+        )
+        return self.async_show_form(step_id="camera", data_schema=schema)
 
     @staticmethod
     @callback
@@ -143,7 +181,9 @@ class ChoresOptionsFlow(OptionsFlow):
         current = self._current()
         if user_input is not None:
             _, problems = chores_mod.parse_custom(user_input.get(CONF_CUSTOM_CHORES, ""))
-            if problems:
+            if len(user_input.get(CONF_QUICK, [])) > chores_mod.MAX_QUICK:
+                errors[CONF_QUICK] = "too_many_quick"
+            elif problems:
                 errors[CONF_CUSTOM_CHORES] = "bad_custom"
                 placeholders["problems"] = "; ".join(problems)
             else:
@@ -151,6 +191,7 @@ class ChoresOptionsFlow(OptionsFlow):
                     {
                         CONF_CUSTOM_CHORES: user_input.get(CONF_CUSTOM_CHORES, ""),
                         CONF_DISABLED_CHORES: user_input.get(CONF_DISABLED_CHORES, []),
+                        CONF_QUICK: user_input.get(CONF_QUICK, [])[: chores_mod.MAX_QUICK],
                         CONF_DIGEST: user_input[CONF_DIGEST],
                         CONF_DIGEST_TIME: str(user_input[CONF_DIGEST_TIME]),
                     }
@@ -165,6 +206,14 @@ class ChoresOptionsFlow(OptionsFlow):
                     CONF_CUSTOM_CHORES,
                     description={"suggested_value": current.get(CONF_CUSTOM_CHORES, DEFAULT_CUSTOM_CHORES)},
                 ): selector.TextSelector(selector.TextSelectorConfig(multiline=True)),
+                vol.Optional(
+                    CONF_QUICK, default=list(current.get(CONF_QUICK) or chores_mod.DEFAULT_QUICK)
+                ): _select(
+                    [(c.key, f"{c.emoji} {c.name}") for c in chores_mod.catalogue(
+                        current.get(CONF_CUSTOM_CHORES, ""), list(current.get(CONF_DISABLED_CHORES) or [])
+                    )],
+                    multiple=True,
+                ),
                 vol.Required(CONF_DIGEST, default=current.get(CONF_DIGEST, DEFAULT_DIGEST)): selector.BooleanSelector(),
                 vol.Required(
                     CONF_DIGEST_TIME, default=current.get(CONF_DIGEST_TIME, DEFAULT_DIGEST_TIME)
@@ -194,6 +243,9 @@ class ChoresOptionsFlow(OptionsFlow):
                     CONF_RENAG: int(user_input[CONF_RENAG]),
                     CONF_NAG_MENTION: (user_input.get(CONF_NAG_MENTION) or "").strip(),
                     CONF_CANS_CHORE: user_input[CONF_CANS_CHORE],
+                    CONF_RECYCLING_NIGHTS: [int(d) for d in user_input.get(CONF_RECYCLING_NIGHTS, [])],
+                    CONF_RECYCLING_WEEKS: user_input[CONF_RECYCLING_WEEKS],
+                    CONF_RECYCLING_CHORE: user_input[CONF_RECYCLING_CHORE],
                     CONF_CHECK_INTERVAL: int(user_input[CONF_CHECK_INTERVAL]),
                     CONF_ASKS_PER_DAY: int(user_input[CONF_ASKS_PER_DAY]),
                     CONF_ASK_GAP: float(user_input[CONF_ASK_GAP]),
@@ -202,7 +254,6 @@ class ChoresOptionsFlow(OptionsFlow):
                     CONF_CONFIDENCE: int(user_input[CONF_CONFIDENCE]),
                     CONF_MIN_ELEVATION: float(user_input[CONF_MIN_ELEVATION]),
                     CONF_MIN_BRIGHTNESS: int(user_input[CONF_MIN_BRIGHTNESS]),
-                    CONF_SAVE_SAMPLES: user_input[CONF_SAVE_SAMPLES],
                 }
                 for key in (CONF_ROI_LEFT, CONF_ROI_TOP, CONF_ROI_RIGHT, CONF_ROI_BOTTOM):
                     changes[key] = float(user_input[key])
@@ -220,7 +271,7 @@ class ChoresOptionsFlow(OptionsFlow):
         ]
         roi_keys = (CONF_ROI_LEFT, CONF_ROI_TOP, CONF_ROI_RIGHT, CONF_ROI_BOTTOM)
         schema_dict: dict = {
-            req(CONF_CANS_ENABLED, DEFAULT_CANS_ENABLED): selector.BooleanSelector(),
+            req(CONF_CANS_ENABLED, bool(current.get(CONF_CAMERA)) or DEFAULT_CANS_ENABLED): selector.BooleanSelector(),
             vol.Optional(
                 CONF_CAMERA, description={"suggested_value": current.get(CONF_CAMERA) or None}
             ): selector.EntitySelector(selector.EntitySelectorConfig(domain="camera")),
@@ -236,13 +287,19 @@ class ChoresOptionsFlow(OptionsFlow):
                 vol.Optional(
                     CONF_CANS_NIGHTS,
                     default=[str(d) for d in current.get(CONF_CANS_NIGHTS, DEFAULT_CANS_NIGHTS)],
-                ): _select([(str(i), name) for i, name in enumerate(WEEKDAYS)], multiple=True),
+                ): _weekdays(),
+                vol.Optional(
+                    CONF_RECYCLING_NIGHTS,
+                    default=[str(d) for d in current.get(CONF_RECYCLING_NIGHTS, DEFAULT_RECYCLING_NIGHTS)],
+                ): _weekdays(),
+                req(CONF_RECYCLING_WEEKS, DEFAULT_RECYCLING_WEEKS): _weeks(),
                 req(CONF_NAG_TIME, DEFAULT_NAG_TIME): selector.TimeSelector(),
                 req(CONF_RENAG, DEFAULT_RENAG): _number(0, MAX_RENAG, 5, "minutes"),
                 vol.Optional(
                     CONF_NAG_MENTION, description={"suggested_value": current.get(CONF_NAG_MENTION, "")}
                 ): selector.TextSelector(),
                 req(CONF_CANS_CHORE, DEFAULT_CANS_CHORE): _select(chore_options),
+                req(CONF_RECYCLING_CHORE, DEFAULT_RECYCLING_CHORE): _select(chore_options),
                 req(CONF_CHECK_INTERVAL, DEFAULT_CHECK_INTERVAL): _number(
                     MIN_CHECK_INTERVAL, MAX_CHECK_INTERVAL, 5, "minutes"
                 ),
@@ -253,7 +310,6 @@ class ChoresOptionsFlow(OptionsFlow):
                 req(CONF_CONFIDENCE, DEFAULT_CONFIDENCE): _number(50, 100, 1, "%"),
                 req(CONF_MIN_ELEVATION, DEFAULT_MIN_ELEVATION): _number(-10, 30, 0.5, "°"),
                 req(CONF_MIN_BRIGHTNESS, DEFAULT_MIN_BRIGHTNESS): _number(0, 255, 1),
-                req(CONF_SAVE_SAMPLES, DEFAULT_SAVE_SAMPLES): selector.BooleanSelector(),
             }
         )
         return self.async_show_form(step_id="cans", data_schema=vol.Schema(schema_dict), errors=errors)

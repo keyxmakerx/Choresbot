@@ -1,28 +1,34 @@
-"""discord.py layer for the Chores Discord Bot: the board, buttons and posts.
+"""discord.py layer for the Chores Discord Bot: cards, controls and posting.
+
+Messages use Discord's Components V2 layout: one card (a container with an
+accent colour) holding headings, dividers, a full-width photo and the
+controls, instead of a classic embed with buttons hanging underneath.
 
 Like the laundry bot, the client runs *inside* Home Assistant's event loop as
-a background task tied to the config entry (never ``client.run()``), needs no
-privileged intents and no open ports. Every callback catches its own errors so
-a Discord problem can never bubble into Home Assistant.
+a background task tied to the config entry, needs no privileged intents and
+no open ports. Every control is a ``DynamicItem`` whose custom id says what it
+acts on, so taps on any message route correctly after a restart, and every
+callback catches its own errors so Discord can't bubble into Home Assistant.
 """
 
 from __future__ import annotations
 
 import asyncio
+from dataclasses import dataclass, field
 import io
 import logging
 import re
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 import discord
+from discord import ui
 
 from .const import (
-    BOARD_CANS_ID,
-    BOARD_CLAIM_ID,
-    BOARD_DONE_ID,
-    BOARD_REFRESH_ID,
+    BOARD_BUTTON_TEMPLATE,
+    BOARD_SELECT_TEMPLATE,
     CANS_LABEL_TEMPLATE,
     CANS_NAG_TEMPLATE,
+    QUICK_TEMPLATE,
 )
 
 if TYPE_CHECKING:
@@ -50,72 +56,208 @@ async def _safe_error(interaction: discord.Interaction) -> None:
         _LOGGER.debug("Could not send interaction error", exc_info=True)
 
 
-def _base_embed(interaction: discord.Interaction) -> discord.Embed | None:
-    """The embed on the tapped message, to edit rather than replace."""
-    message = getattr(interaction, "message", None)
-    if message is not None and message.embeds:
-        return message.embeds[0]
-    return None
-
-
-async def _refresh_board_quietly(coordinator: "ChoresCoordinator") -> None:
+async def _private(interaction: discord.Interaction, text: str | None, view=None) -> None:
+    """A private follow-up after the card's own edit; never raises."""
+    if not text:
+        return
     try:
-        await coordinator.async_update_board()
+        kwargs = {"view": view} if view is not None else {}
+        await interaction.followup.send(text, ephemeral=True, **kwargs)
     except Exception:  # noqa: BLE001
-        _LOGGER.debug("Board refresh after a tap failed", exc_info=True)
+        _LOGGER.debug("Could not send a private follow-up", exc_info=True)
 
 
-# --- the chore board ------------------------------------------------------------
+def image_url(interaction: discord.Interaction, filename: str) -> str:
+    """Where the tapped message's photo lives, to keep it when re-rendering."""
+    message = getattr(interaction, "message", None)
+    for attachment in getattr(message, "attachments", None) or []:
+        if attachment.filename == filename:
+            return attachment.url
+    return f"attachment://{filename}"
 
 
-class _ChoreSelect(discord.ui.Select):
-    """One select listing every chore; ``mode`` is "done" or "claim"."""
+# --- card data (plain values the coordinator fills in) ----------------------------
 
-    def __init__(self, coordinator: "ChoresCoordinator | None", mode: str) -> None:
-        options = []
-        if coordinator is not None:
-            for chore in coordinator.chores:
-                options.append(
-                    discord.SelectOption(
-                        label=chore.name[:100],
-                        value=chore.key,
-                        emoji=chore.emoji or None,
-                        description=(chore.note or None) and chore.note[:100],
+
+@dataclass
+class BoardCard:
+    colour: int
+    title: str
+    sections: list[tuple[str, list[str]]]
+    quick: list[tuple[str, str, str]]  # key, emoji, name
+    chores: list[tuple[str, str, str, str]]  # key, emoji, name, note
+    bins_text: str | None
+    cans_enabled: bool
+    footer: str
+
+
+@dataclass
+class BinRow:
+    bin: str
+    emoji: str
+    name: str
+    text: str  # the guess, or the answer once given
+    answered: bool
+
+
+@dataclass
+class AskCard:
+    sid: str
+    colour: int
+    title: str
+    image: str
+    rows: list[BinRow]
+    footer: str
+    closed: bool = False
+    note: str | None = None
+
+
+@dataclass
+class NagCard:
+    night: str
+    colour: int
+    mention: str
+    title: str
+    lines: list[str]
+    image: str | None
+    open_bins: list[tuple[str, str, str]] = field(default_factory=list)  # bin, emoji, name
+    footer: str = ""
+    sid: str | None = None  # a usable snapshot: "is out" also labels it
+
+
+# --- builders ------------------------------------------------------------------
+
+
+def board_view(card: BoardCard) -> ui.LayoutView:
+    view = ui.LayoutView(timeout=None)
+    items: list[Any] = [ui.TextDisplay(f"## {card.title}")]
+    for index, (name, rows) in enumerate(card.sections):
+        if index:
+            items.append(ui.Separator(visible=False, spacing=discord.SeparatorSpacing.small))
+        items.append(ui.TextDisplay(f"**{name}**\n" + "\n".join(rows)))
+    if not card.sections:
+        items.append(ui.TextDisplay("No chores configured."))
+    items.append(ui.Separator())
+    if card.quick:
+        items.append(ui.TextDisplay("-# Quick report: tap what needs doing"))
+        row = ui.ActionRow()
+        for key, emoji, name in card.quick:
+            row.add_item(QuickButton(key, emoji, name))
+        items.append(row)
+    if card.chores:
+        items.append(ui.ActionRow(BoardSelect("done", card.chores)))
+        items.append(ui.ActionRow(BoardSelect("claim", card.chores)))
+    if card.bins_text:
+        items.append(ui.Separator())
+        items.append(ui.TextDisplay(card.bins_text))
+    buttons = ui.ActionRow(BoardButton("refresh"))
+    if card.cans_enabled:
+        buttons.add_item(BoardButton("check"))
+    items.append(buttons)
+    items.append(ui.TextDisplay(f"-# {card.footer}"))
+    view.add_item(ui.Container(*items, accent_colour=card.colour))
+    return view
+
+
+def ask_view(card: AskCard) -> ui.LayoutView:
+    view = ui.LayoutView(timeout=None)
+    items: list[Any] = [
+        ui.TextDisplay(f"### {card.title}"),
+        ui.MediaGallery(discord.MediaGalleryItem(card.image)),
+        ui.TextDisplay("\n".join(f"{r.emoji} **{r.name}** · {r.text}" for r in card.rows)),
+    ]
+    if card.note:
+        items.append(ui.TextDisplay(card.note))
+    if not card.closed:
+        for r in card.rows:
+            if not r.answered:
+                items.append(
+                    ui.ActionRow(
+                        LabelButton(r.bin, "out", card.sid, f"{r.name} out", r.emoji),
+                        LabelButton(r.bin, "in", card.sid, "Not out", None),
                     )
                 )
-        if not options:
-            # A template view (registered for routing only) still needs one.
-            options = [discord.SelectOption(label="…", value="_")]
-        super().__init__(
-            custom_id=BOARD_DONE_ID if mode == "done" else BOARD_CLAIM_ID,
-            placeholder="✅ I did a chore…" if mode == "done" else "🙋 I'll take a chore…",
-            min_values=1,
-            max_values=1,
-            options=options,
-            row=0 if mode == "done" else 1,
+        items.append(ui.ActionRow(LabelButton("all", "skip", card.sid, "Can't tell", "🤷")))
+    items.append(ui.TextDisplay(f"-# {card.footer}"))
+    view.add_item(ui.Container(*items, accent_colour=card.colour))
+    return view
+
+
+def nag_view(card: NagCard) -> ui.LayoutView:
+    view = ui.LayoutView(timeout=None)
+    head = f"{card.mention}\n" if card.mention else ""
+    items: list[Any] = [ui.TextDisplay(f"{head}### {card.title}\n" + "\n".join(card.lines))]
+    if card.image:
+        items.append(ui.MediaGallery(discord.MediaGalleryItem(card.image)))
+    if card.open_bins:
+        row = ui.ActionRow()
+        for bin_name, emoji, name in card.open_bins:
+            row.add_item(NagButton(bin_name, "out", card.night, f"{name} is out", emoji))
+        row.add_item(NagButton("all", "skip", card.night, "No pickup this week", "⏭️"))
+        items.append(row)
+    if card.footer:
+        items.append(ui.TextDisplay(f"-# {card.footer}"))
+    view.add_item(ui.Container(*items, accent_colour=card.colour))
+    return view
+
+
+def preview_view(text: str, colour: int) -> ui.LayoutView:
+    view = ui.LayoutView(timeout=None)
+    view.add_item(
+        ui.Container(
+            ui.TextDisplay(text),
+            ui.MediaGallery(
+                discord.MediaGalleryItem("attachment://region.jpg", description="Whole snapshot"),
+                discord.MediaGalleryItem("attachment://crop.jpg", description="What it compares"),
+            ),
+            accent_colour=colour,
         )
-        self.mode = mode
+    )
+    return view
+
+
+# --- controls ------------------------------------------------------------------
+
+
+class BoardSelect(ui.DynamicItem[ui.Select], template=BOARD_SELECT_TEMPLATE):
+    """"I did a chore…" / "I'll take a chore…"."""
+
+    def __init__(self, what: str, chores: list[tuple[str, str, str, str]] | None = None) -> None:
+        options = [
+            discord.SelectOption(
+                label=name[:100], value=key, emoji=emoji or None,
+                description=(note[:100] if note else None),
+            )
+            for key, emoji, name, note in (chores or [])
+        ] or [discord.SelectOption(label="…", value="_")]
+        super().__init__(
+            ui.Select(
+                custom_id=f"chores:board:{what}",
+                placeholder="✅ I did a chore…" if what == "done" else "🙋 I'll take a chore…",
+                options=options[:25],
+            )
+        )
+        self.what = what
+
+    @classmethod
+    async def from_custom_id(cls, interaction, item, match: re.Match[str], /):
+        return cls(match["what"])
 
     async def callback(self, interaction: discord.Interaction) -> None:
         coordinator = _coordinator(interaction)
-        key = self.values[0]
-        who = interaction.user.display_name
-        uid = interaction.user.id
+        key = self.item.values[0]
+        who, uid = interaction.user.display_name, interaction.user.id
         try:
-            if self.mode == "done":
+            if self.what == "done":
                 chore = await coordinator.async_mark_done(key, who, uid, refresh=False)
                 if chore is None:
                     await interaction.response.send_message(
                         "That chore isn't on the list any more.", ephemeral=True
                     )
                     return
-                await interaction.response.edit_message(
-                    embed=coordinator.board_embed(), view=BoardView(coordinator)
-                )
-                await interaction.followup.send(
-                    f"Nice — {chore.emoji} **{chore.name}** marked done.",
-                    view=UndoView(key),
-                    ephemeral=True,
+                await interaction.response.edit_message(view=coordinator.board_layout())
+                await _private(
+                    interaction, f"Nice — {chore.emoji} **{chore.name}** marked done.", UndoView(key)
                 )
             else:
                 result = await coordinator.async_toggle_claim(key, who, uid)
@@ -125,76 +267,88 @@ class _ChoreSelect(discord.ui.Select):
                     )
                     return
                 chore, claimed = result
-                await interaction.response.edit_message(
-                    embed=coordinator.board_embed(), view=BoardView(coordinator)
-                )
-                await interaction.followup.send(
+                await interaction.response.edit_message(view=coordinator.board_layout())
+                await _private(
+                    interaction,
                     f"{chore.emoji} **{chore.name}** is yours."
                     if claimed
                     else f"Dropped your claim on {chore.emoji} **{chore.name}**.",
-                    ephemeral=True,
                 )
         except Exception:  # noqa: BLE001
             _LOGGER.exception("Board select failed")
             await _safe_error(interaction)
 
 
-class _RefreshButton(discord.ui.Button):
-    def __init__(self) -> None:
+class BoardButton(ui.DynamicItem[ui.Button], template=BOARD_BUTTON_TEMPLATE):
+    def __init__(self, what: str) -> None:
+        label, emoji = ("Refresh", "🔄") if what == "refresh" else ("Check the bins", "📸")
         super().__init__(
-            label="Refresh", emoji="🔄", style=discord.ButtonStyle.secondary,
-            custom_id=BOARD_REFRESH_ID, row=2,
+            ui.Button(label=label, emoji=emoji, style=discord.ButtonStyle.secondary,
+                      custom_id=f"chores:board:{what}")
         )
+        self.what = what
+
+    @classmethod
+    async def from_custom_id(cls, interaction, item, match: re.Match[str], /):
+        return cls(match["what"])
 
     async def callback(self, interaction: discord.Interaction) -> None:
         coordinator = _coordinator(interaction)
         try:
-            await interaction.response.edit_message(
-                embed=coordinator.board_embed(), view=BoardView(coordinator)
-            )
-        except Exception:  # noqa: BLE001
-            _LOGGER.exception("Board refresh failed")
-            await _safe_error(interaction)
-
-
-class _CansButton(discord.ui.Button):
-    """Take a snapshot now and ask about it (also how you teach it on demand)."""
-
-    def __init__(self) -> None:
-        super().__init__(
-            label="Check the cans", emoji="📸", style=discord.ButtonStyle.secondary,
-            custom_id=BOARD_CANS_ID, row=2,
-        )
-
-    async def callback(self, interaction: discord.Interaction) -> None:
-        coordinator = _coordinator(interaction)
-        try:
+            if self.what == "refresh":
+                await interaction.response.edit_message(view=coordinator.board_layout())
+                return
             await interaction.response.defer(ephemeral=True, thinking=True)
             text = await coordinator.async_check_cans(manual=True)
             await interaction.followup.send(text, ephemeral=True)
         except Exception:  # noqa: BLE001
-            _LOGGER.exception("Manual can check failed")
+            _LOGGER.exception("Board button failed")
             try:
-                await interaction.followup.send(
-                    "Couldn't check the cans just now.", ephemeral=True
-                )
+                if interaction.response.is_done():
+                    await interaction.followup.send("Couldn't do that just now.", ephemeral=True)
+                else:
+                    await _safe_error(interaction)
             except Exception:  # noqa: BLE001
                 pass
 
 
-class BoardView(discord.ui.View):
-    """The board's controls. ``coordinator=None`` builds the routing template."""
+class QuickButton(ui.DynamicItem[ui.Button], template=QUICK_TEMPLATE):
+    """One tap: "this needs doing now"."""
 
-    def __init__(self, coordinator: "ChoresCoordinator | None" = None) -> None:
-        super().__init__(timeout=None)
-        self.add_item(_ChoreSelect(coordinator, "done"))
-        self.add_item(_ChoreSelect(coordinator, "claim"))
-        self.add_item(_RefreshButton())
-        if coordinator is None or coordinator.cans_enabled:
-            self.add_item(_CansButton())
+    def __init__(self, key: str, emoji: str | None = None, name: str | None = None) -> None:
+        super().__init__(
+            ui.Button(label=(name or key)[:80], emoji=emoji or None,
+                      style=discord.ButtonStyle.primary, custom_id=f"chores:quick:{key}")
+        )
+        self.key = key
+
+    @classmethod
+    async def from_custom_id(cls, interaction, item, match: re.Match[str], /):
+        return cls(match["key"])
+
+    async def callback(self, interaction: discord.Interaction) -> None:
+        coordinator = _coordinator(interaction)
+        try:
+            result = await coordinator.async_report(self.key, interaction.user.display_name)
+            if result is None:
+                await interaction.response.send_message(
+                    "That chore isn't on the list any more.", ephemeral=True
+                )
+                return
+            chore, fresh = result
+            await interaction.response.edit_message(view=coordinator.board_layout())
+            await _private(
+                interaction,
+                f"🔔 Flagged {chore.emoji} **{chore.name}** as needing doing."
+                if fresh
+                else f"{chore.emoji} **{chore.name}** was already flagged.",
+            )
+        except Exception:  # noqa: BLE001
+            _LOGGER.exception("Quick report failed")
+            await _safe_error(interaction)
 
 
-class _UndoButton(discord.ui.Button):
+class _UndoButton(ui.Button):
     def __init__(self, key: str) -> None:
         super().__init__(label="Undo", emoji="↩️", style=discord.ButtonStyle.secondary)
         self.key = key
@@ -212,7 +366,7 @@ class _UndoButton(discord.ui.Button):
             await _safe_error(interaction)
 
 
-class UndoView(discord.ui.View):
+class UndoView(ui.View):
     """Private, short-lived: offered right after you mark something done."""
 
     def __init__(self, key: str) -> None:
@@ -220,125 +374,82 @@ class UndoView(discord.ui.View):
         self.add_item(_UndoButton(key))
 
 
-# --- trash cans ----------------------------------------------------------------
+class LabelButton(ui.DynamicItem[ui.Button], template=CANS_LABEL_TEMPLATE):
+    """An answer on a snapshot: this bin is out / not out, or can't tell."""
 
-_LABEL_TEXT = {
-    "out": ("Cans out", "🗑️", discord.ButtonStyle.success),
-    "in": ("Not out", "🏠", discord.ButtonStyle.secondary),
-    "skip": ("Can't tell", "🤷", discord.ButtonStyle.secondary),
-}
-
-
-class CansLabelButton(
-    discord.ui.DynamicItem[discord.ui.Button], template=CANS_LABEL_TEMPLATE
-):
-    """A label button on a snapshot. The sample id rides in the custom id, so
-    the buttons keep working across restarts with nothing kept in memory."""
-
-    def __init__(self, label: str, sid: str) -> None:
-        text, emoji, style = _LABEL_TEXT[label]
+    def __init__(self, bin_name: str, label: str, sid: str,
+                 text: str | None = None, emoji: str | None = None) -> None:
+        style = discord.ButtonStyle.success if label == "out" else discord.ButtonStyle.secondary
         super().__init__(
-            discord.ui.Button(
-                label=text, emoji=emoji, style=style,
-                custom_id=f"chores:cans:{label}:{sid}",
-            )
+            ui.Button(label=text or label, emoji=emoji, style=style,
+                      custom_id=f"chores:cans:{bin_name}:{label}:{sid}")
         )
-        self.label = label
-        self.sid = sid
+        self.bin, self.label, self.sid = bin_name, label, sid
 
     @classmethod
-    async def from_custom_id(
-        cls, interaction: discord.Interaction, item: discord.ui.Button, match: re.Match[str], /
-    ) -> "CansLabelButton":
-        return cls(match["label"], match["sid"])
+    async def from_custom_id(cls, interaction, item, match: re.Match[str], /):
+        return cls(match["bin"], match["label"], match["sid"])
 
     async def callback(self, interaction: discord.Interaction) -> None:
         coordinator = _coordinator(interaction)
         try:
-            result = await coordinator.async_label(
-                self.sid, self.label, interaction.user.display_name, interaction.user.id,
-                _base_embed(interaction),
+            reply = await coordinator.async_label(
+                self.sid, self.bin, self.label, interaction.user.display_name, interaction.user.id,
+                edit_message=False,
             )
-            if result is None:
+            if reply is None:
                 await interaction.response.send_message(
-                    "That snapshot has already been answered or has expired.",
-                    ephemeral=True,
+                    "That snapshot has already been answered or has expired.", ephemeral=True
                 )
                 return
-            embed, reply = result
-            await interaction.response.edit_message(embed=embed, view=None)
-            if reply:
-                await interaction.followup.send(reply, ephemeral=True)
-            await _refresh_board_quietly(coordinator)
+            layout = coordinator.ask_layout(self.sid, image_url(interaction, "cans.jpg"))
+            if layout is not None:
+                await interaction.response.edit_message(view=layout)
+            else:
+                await interaction.response.defer()
+            await _private(interaction, reply)
+            await coordinator.async_update_board()
         except Exception:  # noqa: BLE001
-            _LOGGER.exception("Can label failed")
+            _LOGGER.exception("Bin label failed")
             await _safe_error(interaction)
 
 
-def label_view(sid: str) -> discord.ui.View:
-    view = discord.ui.View(timeout=None)
-    for label in ("out", "in", "skip"):
-        view.add_item(CansLabelButton(label, sid))
-    return view
+class NagButton(ui.DynamicItem[ui.Button], template=CANS_NAG_TEMPLATE):
+    """On a bin-night reminder: say a bin is out, or skip this week."""
 
-
-_NAG_TEXT = {
-    "out": ("They're out", "✅", discord.ButtonStyle.success),
-    "skip": ("No pickup this week", "⏭️", discord.ButtonStyle.secondary),
-}
-
-
-class CansNagButton(
-    discord.ui.DynamicItem[discord.ui.Button], template=CANS_NAG_TEMPLATE
-):
-    """On a night reminder: say they're out (silences it) or skip this week."""
-
-    def __init__(self, action: str, night: str) -> None:
-        text, emoji, style = _NAG_TEXT[action]
+    def __init__(self, bin_name: str, action: str, night: str,
+                 text: str | None = None, emoji: str | None = None) -> None:
+        style = discord.ButtonStyle.success if action == "out" else discord.ButtonStyle.secondary
         super().__init__(
-            discord.ui.Button(
-                label=text, emoji=emoji, style=style,
-                custom_id=f"chores:nag:{action}:{night}",
-            )
+            ui.Button(label=text or action, emoji=emoji, style=style,
+                      custom_id=f"chores:nag:{bin_name}:{action}:{night}")
         )
-        self.action = action
-        self.night = night
+        self.bin, self.action, self.night = bin_name, action, night
 
     @classmethod
-    async def from_custom_id(
-        cls, interaction: discord.Interaction, item: discord.ui.Button, match: re.Match[str], /
-    ) -> "CansNagButton":
-        return cls(match["action"], match["night"])
+    async def from_custom_id(cls, interaction, item, match: re.Match[str], /):
+        return cls(match["bin"], match["action"], match["night"])
 
     async def callback(self, interaction: discord.Interaction) -> None:
         coordinator = _coordinator(interaction)
         try:
-            embed = await coordinator.async_nag_action(
-                self.night, self.action, interaction.user.display_name, interaction.user.id,
-                _base_embed(interaction),
+            ok = await coordinator.async_nag_action(
+                self.night, self.bin, self.action, interaction.user.display_name, interaction.user.id,
             )
-            if embed is None:
+            if not ok:
                 await interaction.response.send_message(
                     "That reminder is from another night.", ephemeral=True
                 )
                 return
-            await interaction.response.edit_message(embed=embed, view=None)
-            await _refresh_board_quietly(coordinator)
+            layout = coordinator.nag_layout(self.night, image_url(interaction, "cans.jpg"))
+            if layout is not None:
+                await interaction.response.edit_message(view=layout)
+            else:
+                await interaction.response.defer()
+            await coordinator.async_update_board()
         except Exception:  # noqa: BLE001
             _LOGGER.exception("Nag action failed")
             await _safe_error(interaction)
-
-
-def nag_view(night: str, *, with_labels_sid: str | None = None) -> discord.ui.View:
-    """Reminder buttons; with a usable snapshot, the label buttons too."""
-    view = discord.ui.View(timeout=None)
-    if with_labels_sid:
-        for label in ("out", "in"):
-            view.add_item(CansLabelButton(label, with_labels_sid))
-    else:
-        view.add_item(CansNagButton("out", night))
-    view.add_item(CansNagButton("skip", night))
-    return view
 
 
 # --- client and helper -----------------------------------------------------------
@@ -348,13 +459,10 @@ class ChoresDiscordClient(discord.Client):
     def __init__(self, coordinator: "ChoresCoordinator", **kwargs) -> None:
         super().__init__(**kwargs)
         self.coordinator = coordinator
-        self._registered = False
 
     async def setup_hook(self) -> None:
         # Registered once, before connecting, so taps on old messages route.
-        self.add_view(BoardView(None))
-        self.add_dynamic_items(CansLabelButton, CansNagButton)
-        self._registered = True
+        self.add_dynamic_items(BoardSelect, BoardButton, QuickButton, LabelButton, NagButton)
 
     async def on_ready(self) -> None:
         _LOGGER.debug("Chores bot connected as %s", self.user)
@@ -395,26 +503,18 @@ class DiscordBot:
     async def async_post(
         self,
         channel_id: int,
+        view: ui.LayoutView,
         *,
-        embed: discord.Embed | None = None,
-        view: discord.ui.View | None = None,
-        content: str | None = None,
         files: list[tuple[str, bytes]] | None = None,
         silent: bool = True,
         mention: bool = False,
     ) -> int:
-        """Post a message; returns its id. ``mention`` allows user/role pings."""
+        """Post a card; returns its id. ``mention`` lets user/role mentions ping."""
         await self._wait_ready()
         channel = await self._channel(channel_id)
-        attachments = [
-            discord.File(io.BytesIO(data), filename=name) for name, data in files or []
-        ]
-        kwargs = {}
-        if view is not None:
-            kwargs["view"] = view
+        attachments = [discord.File(io.BytesIO(data), filename=name) for name, data in files or []]
         message = await channel.send(
-            content=content,
-            embed=embed,
+            view=view,
             files=attachments or discord.utils.MISSING,
             silent=silent,
             allowed_mentions=(
@@ -422,7 +522,6 @@ class DiscordBot:
                 if mention
                 else discord.AllowedMentions.none()
             ),
-            **kwargs,
         )
         return message.id
 
@@ -431,16 +530,22 @@ class DiscordBot:
         channel = await self._channel(channel_id)
         return await channel.fetch_message(message_id)
 
-    async def async_edit(
-        self,
-        channel_id: int,
-        message_id: int,
-        *,
-        embed: discord.Embed,
-        view: discord.ui.View | None = discord.utils.MISSING,
-    ) -> None:
+    async def async_edit(self, channel_id: int, message_id: int, view: ui.LayoutView) -> None:
         message = await self.async_fetch(channel_id, message_id)
-        await message.edit(embed=embed, view=view)
+        await message.edit(view=view)
+
+    async def async_edit_keeping(
+        self, channel_id: int, message_id: int, build, filename: str = "cans.jpg"
+    ) -> None:
+        """Re-render a card that carries a photo, pointing at the stored photo."""
+        message = await self.async_fetch(channel_id, message_id)
+        url = next(
+            (a.url for a in message.attachments if a.filename == filename),
+            f"attachment://{filename}",
+        )
+        view = build(url)
+        if view is not None:
+            await message.edit(view=view)
 
     async def async_delete(self, channel_id: int, message_id: int) -> None:
         try:

@@ -30,6 +30,14 @@ MAX_CHORES = 25
 # Undo history kept per chore (only the latest entry can be undone).
 HISTORY_MAX = 5
 
+# A quick report ("Trash needs taking out") lapses after this long if nobody
+# marks the chore done.
+REPORT_TTL = 2 * DAY
+
+# Quick-report buttons on the board: Discord fits five buttons in a row.
+MAX_QUICK = 5
+DEFAULT_QUICK = ("trash", "recycling", "dishes", "counters", "bathroom")
+
 
 @dataclass(frozen=True)
 class Chore:
@@ -45,7 +53,8 @@ class Chore:
 DEFAULT_CHORES: tuple[Chore, ...] = (
     Chore("dishes", "Dishes", "🍽️", 1, "Load or unload the dishwasher, or hand-wash"),
     Chore("trash", "Trash", "🗑️", 3, "Kitchen trash out; cans to the curb on trash night"),
-    Chore("trash_ext", "Trash-Ext", "📦", 7, "Boxes, recycling and anything bulky"),
+    Chore("recycling", "Recycling", "♻️", 7, "Recycling out; bin to the curb on recycling night"),
+    Chore("trash_ext", "Trash-Ext", "📦", 7, "Boxes and anything bulky"),
     Chore("vacuuming", "Vacuuming", "🧹", 7),
     Chore("mopping", "Mopping", "🪣", 14),
     Chore("bathroom", "Bathroom", "🚽", 7),
@@ -54,6 +63,7 @@ DEFAULT_CHORES: tuple[Chore, ...] = (
 )
 
 # Status codes, in board order (most urgent first).
+REPORTED = "reported"
 OVERDUE = "overdue"
 DUE = "due"
 SOON = "soon"
@@ -61,13 +71,14 @@ FRESH = "fresh"
 ANYTIME = "anytime"
 
 STATUS_ICON = {
+    REPORTED: "🔔",
     OVERDUE: "🔴",
     DUE: "🟠",
     SOON: "🟡",
     FRESH: "🟢",
     ANYTIME: "⚪",
 }
-_STATUS_RANK = {OVERDUE: 0, DUE: 1, SOON: 2, ANYTIME: 3, FRESH: 4}
+_STATUS_RANK = {REPORTED: -1, OVERDUE: 0, DUE: 1, SOON: 2, ANYTIME: 3, FRESH: 4}
 
 
 def slugify(name: str) -> str:
@@ -141,6 +152,8 @@ def blank() -> dict:
         "claimed_by": None,
         "claimed_by_id": None,
         "claimed_at": None,
+        "reported_by": None,
+        "reported_at": None,
         "history": [],
     }
 
@@ -167,7 +180,39 @@ def mark_done(state: dict, key: str, now: float, who: str, who_id: int | None) -
     item["last_by"] = who
     item["last_by_id"] = who_id
     item["claimed_by"] = item["claimed_by_id"] = item["claimed_at"] = None
+    item["reported_by"] = item["reported_at"] = None
     return item
+
+
+def report(state: dict, key: str, now: float, who: str) -> bool:
+    """Flag a chore as needing doing now. Returns False if already flagged."""
+    item = entry(state, key)
+    if reporter(item, now) is not None:
+        return False
+    item["reported_by"] = who
+    item["reported_at"] = now
+    return True
+
+
+def reporter(item: dict, now: float) -> str | None:
+    """Who flagged this chore as needing doing, if the flag is still live."""
+    at = item.get("reported_at")
+    if not item.get("reported_by") or at is None or now - at > REPORT_TTL:
+        return None
+    return item["reported_by"]
+
+
+def short_name(name: str) -> str:
+    """One word for a quick-report button: "Wipe counters" → "Counters"."""
+    words = name.split()
+    return name if len(words) <= 1 else words[-1].capitalize()
+
+
+def quick_chores(chores: list[Chore], keys) -> list[Chore]:
+    """The chores to show as quick-report buttons, in the configured order."""
+    by_key = {c.key: c for c in chores}
+    picked = [by_key[k] for k in keys if k in by_key]
+    return picked[:MAX_QUICK]
 
 
 def undo(state: dict, key: str, who_id: int | None) -> bool:
@@ -212,6 +257,8 @@ def claimant(item: dict, now: float) -> str | None:
 
 def status(chore: Chore, item: dict, now: float) -> tuple[str, float | None]:
     """(status code, seconds until due; negative when overdue; None if n/a)."""
+    if reporter(item, now) is not None:
+        return REPORTED, 0.0
     if chore.every_days <= 0:
         return ANYTIME, None
     last = item.get("last_done")
@@ -238,30 +285,76 @@ def ago(seconds: float) -> str:
     return f"{int(seconds // DAY)}d"
 
 
-def board_lines(chores: list[Chore], state: dict, now: float) -> list[str]:
-    """One line per chore, most urgent first, for the board embed."""
+def line(chore: Chore, item: dict, now: float) -> str:
+    """One board line: icon, name, then what matters about it right now."""
+    code, left = status(chore, item, now)
+    parts = [f"{STATUS_ICON[code]} {chore.emoji} **{chore.name}**"]
+    who_reported = reporter(item, now)
+    if code == REPORTED and who_reported:
+        parts.append(f"{who_reported} says it needs doing ({ago(now - item['reported_at'])} ago)".replace("(just now ago)", "(just now)"))
+    elif code == OVERDUE and left is not None:
+        parts.append(f"overdue {ago(left)}")
+    elif code == DUE:
+        parts.append("due" if item["last_done"] is not None else "not done yet")
+    elif code == SOON and left is not None:
+        parts.append(f"due in {ago(left)}")
+    if item["last_done"] is not None and code != REPORTED:
+        by = f" by {item['last_by']}" if item["last_by"] else ""
+        span = ago(now - item["last_done"])
+        parts.append(f"done just now{by}" if span == "just now" else f"done {span} ago{by}")
+    who = claimant(item, now)
+    if who:
+        parts.append(f"🙋 {who}")
+    return " · ".join(parts)
+
+
+def _sorted(chores: list[Chore], state: dict, now: float) -> list[tuple[str, Chore]]:
     rows = []
     for index, chore in enumerate(chores):
-        item = entry(state, chore.key)
-        code, left = status(chore, item, now)
-        parts = [f"{STATUS_ICON[code]} {chore.emoji} **{chore.name}**"]
-        if code == OVERDUE and left is not None:
-            parts.append(f"overdue {ago(left)}")
-        elif code == DUE:
-            parts.append("due" if item["last_done"] is not None else "not done yet")
-        elif code == SOON and left is not None:
-            parts.append(f"due in {ago(left)}")
-        if item["last_done"] is not None:
-            by = f" by {item['last_by']}" if item["last_by"] else ""
-            parts.append(f"done {ago(now - item['last_done'])} ago{by}".replace(
-                "done just now ago", "done just now"
-            ))
-        who = claimant(item, now)
-        if who:
-            parts.append(f"🙋 {who}")
-        rows.append((_STATUS_RANK[code], left if left is not None else 0, index, " · ".join(parts)))
+        code, left = status(chore, entry(state, chore.key), now)
+        rows.append((_STATUS_RANK[code], left if left is not None else 0, index, code, chore))
     rows.sort(key=lambda row: (row[0], row[1], row[2]))
-    return [row[3] for row in rows]
+    return [(row[3], row[4]) for row in rows]
+
+
+def board_lines(chores: list[Chore], state: dict, now: float) -> list[str]:
+    """One line per chore, most urgent first."""
+    return [line(c, entry(state, c.key), now) for _, c in _sorted(chores, state, now)]
+
+
+SECTION_NEEDS = "Needs doing"
+SECTION_CLAIMED = "Claimed"
+SECTION_SOON = "Coming up"
+SECTION_DONE = "Done recently"
+
+
+def board_sections(chores: list[Chore], state: dict, now: float) -> list[tuple[str, list[str]]]:
+    """The board grouped for reading at a glance; empty groups are left out.
+
+    A claimed chore sits under "Claimed" whatever its due state, since
+    somebody has it in hand.
+    """
+    groups: dict[str, list[str]] = {
+        SECTION_NEEDS: [], SECTION_CLAIMED: [], SECTION_SOON: [], SECTION_DONE: []
+    }
+    for code, chore in _sorted(chores, state, now):
+        item = entry(state, chore.key)
+        text = line(chore, item, now)
+        if claimant(item, now):
+            groups[SECTION_CLAIMED].append(text)
+        elif code in (REPORTED, OVERDUE, DUE):
+            groups[SECTION_NEEDS].append(text)
+        elif code == SOON:
+            groups[SECTION_SOON].append(text)
+        else:
+            groups[SECTION_DONE].append(text)
+    return [(name, rows) for name, rows in groups.items() if rows]
+
+
+def worst(chores: list[Chore], state: dict, now: float) -> str:
+    """The most urgent status on the board (sets the card's colour)."""
+    ordered = _sorted(chores, state, now)
+    return ordered[0][0] if ordered else FRESH
 
 
 def needing_attention(chores: list[Chore], state: dict, now: float) -> list[Chore]:
@@ -270,7 +363,7 @@ def needing_attention(chores: list[Chore], state: dict, now: float) -> list[Chor
     for chore in chores:
         item = entry(state, chore.key)
         code, _ = status(chore, item, now)
-        if code in (OVERDUE, DUE) and claimant(item, now) is None:
+        if code in (REPORTED, OVERDUE, DUE) and claimant(item, now) is None:
             out.append(chore)
     return out
 

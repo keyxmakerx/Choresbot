@@ -58,6 +58,22 @@ def test_cans_night() -> None:
     assert trash.night_key(tuesday) == "2026-12-01"
 
 
+def test_every_other_week() -> None:
+    tue_even = datetime(2026, 12, 8, 19, 0)  # ISO week 50
+    tue_odd = datetime(2026, 12, 1, 19, 0)  # ISO week 49
+    assert trash.is_cans_night(tue_even, [1], trash.WEEKS_EVEN)
+    assert not trash.is_cans_night(tue_odd, [1], trash.WEEKS_EVEN)
+    assert trash.is_cans_night(tue_odd, [1], trash.WEEKS_ODD)
+    assert trash.is_cans_night(tue_odd, [1], trash.WEEKS_EVERY)
+
+
+def test_bins_counted_apart() -> None:
+    refs = [{"label": "out"}, {"bin": "recycling", "label": "out"}, {"bin": "recycling", "label": "in"}]
+    assert trash.label_counts(refs, "trash") == {"out": 1, "in": 0}  # no bin = trash
+    assert trash.label_counts(refs, "recycling") == {"out": 1, "in": 1}
+    assert len(trash.for_bin(refs, "recycling")) == 2
+
+
 def _ask(**kw):
     base = dict(now=NOW, result=trash.UNSURE, ready=False, asks=[], max_per_day=3,
                 min_gap_hours=2, cans_night=False)

@@ -27,8 +27,10 @@ ROI = (0.70, 0.55, 0.90, 0.80)
 KEY = vision.roi_key(ROI)
 
 
-def scene(cans: bool, seed: int, light: float = 1.0, size=(1920, 1080)) -> bytes:
-    """A crude street: sky, lawn, curb, road, maybe two cans; random clutter."""
+def scene(cans: bool, seed: int, light: float = 1.0, size=(1920, 1080), recycling=None) -> bytes:
+    """A crude street: sky, lawn, curb, road, maybe a green trash can and a
+    blue recycling bin (both follow ``cans`` unless ``recycling`` is given)."""
+    recycling = cans if recycling is None else recycling
     rng = random.Random(seed)
     width, height = size
     img = Image.new("RGB", size, (120, 160, 210))
@@ -40,10 +42,10 @@ def scene(cans: bool, seed: int, light: float = 1.0, size=(1920, 1080)) -> bytes
     x = rng.randint(0, width - 400)
     draw.rectangle((x, int(height * 0.74), x + 380, int(height * 0.86)), fill=(
         rng.randint(30, 200), rng.randint(30, 200), rng.randint(30, 200)))
-    if cans:
-        base_x = int(width * 0.75) + rng.randint(-25, 25)
-        top = int(height * 0.60) + rng.randint(-10, 10)
-        for offset, colour in ((0, (25, 80, 35)), (95, (30, 60, 140))):
+    base_x = int(width * 0.75) + rng.randint(-25, 25)
+    top = int(height * 0.60) + rng.randint(-10, 10)
+    for offset, colour, present in ((0, (25, 80, 35), cans), (95, (30, 60, 140), recycling)):
+        if present:
             draw.rectangle(
                 (base_x + offset, top, base_x + offset + 80, int(height * 0.71)),
                 fill=colour,
@@ -112,6 +114,27 @@ def test_learns_from_few_labels() -> None:
             trials += 1
             correct += p.label == ("out" if cans else "in")
     assert correct / trials >= 0.9, (correct, trials)
+
+
+def test_two_bins_learned_apart() -> None:
+    """Trash and recycling vary independently; each is judged from its own labels."""
+    combos = [(t, r) for t in (True, False) for r in (True, False)]
+    shots = {}
+    for i in range(16):
+        t, r = combos[i % 4]
+        shots[i] = (t, r, vision.analyse(scene(t, 300 + i, recycling=r), ROI).features)
+    trash_refs = [{"label": "out" if t else "in", "features": f} for t, r, f in shots.values()]
+    recycling_refs = [{"label": "out" if r else "in", "features": f} for t, r, f in shots.values()]
+    right = {"trash": 0, "recycling": 0}
+    trials = 0
+    for seed in range(400, 416):
+        t, r = combos[seed % 4]
+        f = vision.analyse(scene(t, seed, light=0.8 + (seed % 3) * 0.15, recycling=r), ROI).features
+        right["trash"] += vision.classify(trash_refs, f).label == ("out" if t else "in")
+        right["recycling"] += vision.classify(recycling_refs, f).label == ("out" if r else "in")
+        trials += 1
+    for name, n in right.items():
+        assert n / trials >= 0.85, (name, n, trials)
 
 
 def test_leave_one_out() -> None:
