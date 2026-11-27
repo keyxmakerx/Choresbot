@@ -21,6 +21,7 @@ from .const import (
     CONF_ASKS_PER_DAY,
     CONF_BIN_ADMINS,
     CONF_BOT_TOKEN,
+    CONF_BUMP_AFTER,
     CONF_CAMERA,
     CONF_CANS_CHANNEL_ID,
     CONF_CANS_CHORE,
@@ -50,6 +51,7 @@ from .const import (
     CONF_RECYCLING_WEEKS,
     DEFAULT_ASK_GAP,
     DEFAULT_ASKS_PER_DAY,
+    DEFAULT_BUMP_AFTER,
     DEFAULT_CANS_CHORE,
     DEFAULT_CANS_ENABLED,
     DEFAULT_CANS_NIGHTS,
@@ -70,6 +72,7 @@ from .const import (
     DEFAULT_RECYCLING_WEEKS,
     DOMAIN,
     MAX_ASKS_PER_DAY,
+    MAX_BUMP_AFTER,
     MAX_CHECK_INTERVAL,
     MAX_RENAG,
     MIN_CHECK_INTERVAL,
@@ -195,6 +198,7 @@ class ChoresOptionsFlow(OptionsFlow):
                         CONF_QUICK: user_input.get(CONF_QUICK, [])[: chores_mod.MAX_QUICK],
                         CONF_DIGEST: user_input[CONF_DIGEST],
                         CONF_DIGEST_TIME: str(user_input[CONF_DIGEST_TIME]),
+                        CONF_BUMP_AFTER: int(user_input[CONF_BUMP_AFTER]),
                     }
                 )
             current = {**current, **user_input}
@@ -219,6 +223,9 @@ class ChoresOptionsFlow(OptionsFlow):
                 vol.Required(
                     CONF_DIGEST_TIME, default=current.get(CONF_DIGEST_TIME, DEFAULT_DIGEST_TIME)
                 ): selector.TimeSelector(),
+                vol.Required(
+                    CONF_BUMP_AFTER, default=current.get(CONF_BUMP_AFTER, DEFAULT_BUMP_AFTER)
+                ): _number(0, MAX_BUMP_AFTER, 1, "messages"),
             }
         )
         return self.async_show_form(

@@ -192,6 +192,21 @@ async def scenario() -> None:
         assert "chores:board:done" in ids and "chores:board:check" in ids
         assert "Recycling" in board["text"] and "Trash-Ext" in board["text"]
 
+        # Chat pushes the board up; after 5 messages and a quiet minute it moves down.
+        timers = []
+        coord_mod.async_call_later = lambda _h, delay, fn: timers.append(fn) or (lambda: None)
+        first = coord.state["board"]["message_id"]
+        coord.note_channel_message(999)  # another channel doesn't count
+        for _ in range(4):
+            coord.note_channel_message(111)
+        assert not timers
+        coord.note_channel_message(111)
+        assert len(timers) == 1
+        await timers[0](None)
+        assert coord.state["board"]["message_id"] != first and first not in bot.views
+        assert coord._since_board == 0
+        coord_mod.async_call_later = _no_timer
+
         # A quick report puts the chore at the top, flagged with who said so.
         await coord.async_report("recycling", "Sam")
         text = _text(coord.board_layout())

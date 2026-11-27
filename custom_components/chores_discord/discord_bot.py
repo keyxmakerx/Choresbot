@@ -582,6 +582,16 @@ class ChoresDiscordClient(discord.Client):
             BoardSelect, BoardButton, QuickButton, LabelButton, NagButton, PeekButton
         )
 
+    async def on_message(self, message: discord.Message) -> None:
+        # Only that someone posted is used, never what they wrote, so this
+        # needs no privileged intent. The bot's own posts don't count.
+        if message.author.bot or message.guild is None:
+            return
+        try:
+            self.coordinator.note_channel_message(message.channel.id)
+        except Exception:  # noqa: BLE001
+            _LOGGER.debug("Could not note a channel message", exc_info=True)
+
     async def on_ready(self) -> None:
         _LOGGER.debug("Chores bot connected as %s", self.user)
         try:

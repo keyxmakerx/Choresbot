@@ -52,6 +52,7 @@
           "custom_chores": "Custom chores",
           "digest": "Move the board to the bottom daily",
           "digest_time": "Daily board time",
+          "bump_after": "Move the board down after",
           "quick_reports": "Quick-report buttons"
         },
         "data_description": {
@@ -59,6 +60,7 @@
           "custom_chores": "Example: Clean litter box | 🐈 | 2",
           "digest": "Re-posts the board once a day (silently) so it isn't buried under chat.",
           "digest_time": "When the board is re-posted.",
+          "bump_after": "When this many messages from people have pushed the board up, it moves back to the bottom once the channel has been quiet for a minute. 0 turns it off.",
           "quick_reports": "Up to five chores shown as one-tap buttons on the board. Tapping one flags the chore as needing doing now."
         }
       },

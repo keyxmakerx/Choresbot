@@ -145,6 +145,9 @@ class ChoresCoordinator:
         }
         self.nag_mention = str(opts.get(C.CONF_NAG_MENTION) or "").strip()
         self.bin_admins = parse_ids(opts.get(C.CONF_BIN_ADMINS) or "")
+        self.bump_after = int(opts.get(C.CONF_BUMP_AFTER, C.DEFAULT_BUMP_AFTER))
+        self._since_board = 0  # messages from people since the board was last posted
+        self._bump_cancel = None
         self.confidence = float(opts.get(C.CONF_CONFIDENCE, C.DEFAULT_CONFIDENCE)) / 100.0
         self.min_labels = int(opts.get(C.CONF_MIN_LABELS, C.DEFAULT_MIN_LABELS))
         self.min_accuracy = float(opts.get(C.CONF_MIN_ACCURACY, C.DEFAULT_MIN_ACCURACY)) / 100.0
@@ -229,6 +232,9 @@ class ChoresCoordinator:
             _LOGGER.exception("Discord bot stopped")
 
     async def async_shutdown(self) -> None:
+        if self._bump_cancel:
+            self._bump_cancel()
+            self._bump_cancel = None
         for unsub in self._unsubs:
             unsub()
         self._unsubs.clear()
@@ -365,9 +371,32 @@ class ChoresCoordinator:
                 board["message_id"] = await self._bot.async_post(
                     self.channel_id, self.board_layout()
                 )
+                self._since_board = 0
                 self._save()
             except Exception:  # noqa: BLE001
                 _LOGGER.warning("Could not post the chore board", exc_info=True)
+
+    @callback
+    def note_channel_message(self, channel_id: int) -> None:
+        """Someone posted in the board's channel. After enough of them, and a
+        minute of quiet so it doesn't jump around mid-conversation, move the
+        board back to the bottom (silently)."""
+        if channel_id != self.channel_id or self.bump_after <= 0:
+            return
+        self._since_board += 1
+        if self._since_board < self.bump_after:
+            return
+        if self._bump_cancel:
+            self._bump_cancel()
+
+        async def _bump(_now) -> None:
+            self._bump_cancel = None
+            try:
+                await self.async_update_board(repost=True)
+            except Exception:  # noqa: BLE001
+                _LOGGER.exception("Moving the board to the bottom failed")
+
+        self._bump_cancel = async_call_later(self.hass, C.BUMP_QUIET_S, _bump)
 
     async def _tick_board(self, _now) -> None:
         await self.async_update_board()

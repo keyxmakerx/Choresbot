@@ -27,6 +27,12 @@ CONF_QUICK = "quick_reports"
 DEFAULT_CUSTOM_CHORES = ""
 DEFAULT_DIGEST_TIME = "09:00:00"
 DEFAULT_DIGEST = True
+# Re-post the board at the bottom after this many messages from people (0 = off),
+# once the channel has been quiet for BUMP_QUIET_S.
+CONF_BUMP_AFTER = "bump_after"
+DEFAULT_BUMP_AFTER = 5
+MAX_BUMP_AFTER = 50
+BUMP_QUIET_S = 60
 
 # --- Options: trash cans ---
 CONF_CANS_ENABLED = "cans_enabled"

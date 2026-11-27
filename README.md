@@ -46,8 +46,13 @@ with the controls inside the card.
 | **🙋 I'll take a chore…** | Claim a chore so nobody doubles up. Pick it again to drop the claim. Claims lapse after a day. |
 | **📸 Check the bins** | Take a look now and answer only you, privately. Everyone gets a read-only "trash out (92% sure), recycling not out". Admins get the working: the snapshot with the region drawn, the crop, each bin's guess, confidence and closest sample, the lighting, and buttons to teach it. |
 
-Once a day (09:00 by default) the board is re-posted at the bottom of the
-channel, silently, so it isn't buried under chat.
+Discord can't pin a message to the bottom, so the bot moves the board back
+down itself, silently. After 5 messages from people (a setting; 0 turns it
+off) it waits for a minute of quiet, so it doesn't jump around mid-conversation,
+then re-posts the board at the bottom and removes the old one. It only notices
+that someone posted, never what they wrote, so no privileged intent is needed.
+It also moves down once a day (09:00 by default). A channel where only the bot
+posts keeps the board last without any of this.
 
 ### Chores
 
